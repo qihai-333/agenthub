@@ -546,6 +546,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private bool _picking;
         private bool _tiled;
         private float _tileIn;
+        private readonly bool[] _tileDone = new bool[3];
         private int _hoverBtn = -1;
         private readonly List<int> _roles = new List<int>();
         private string _lastCopied = "";
@@ -584,7 +585,16 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 int idx = _roles[k];
                 IntPtr h;
                 if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h)) continue;
-                Host.Apply(h, Handle, rr[k], _agents[idx].OffsetFrame);
+                if (_tileDone[k]) continue;
+                bool ok = Host.Apply(h, Handle, rr[k], _agents[idx].OffsetFrame);
+                if (ok)
+                {
+                    // 关键：把应用窗口提到我们画布之上，否则全屏画布会盖住它
+                    Native.SetWindowPos(h, (IntPtr)0, 0, 0, 0, 0,
+                        Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+                    _tileDone[k] = true;
+                }
+                Program.Log("tile " + _agents[idx].Id + " ok=" + ok);
             }
         }
 
@@ -600,6 +610,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
             _shown = -1;
             _tiled = true;
+            for (int k = 0; k < 3; k++) _tileDone[k] = false;
             ApplyBounds();
             Invalidate();
         }
@@ -610,6 +621,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             foreach (int idx in cur2) Cancel(idx);
             _roles.Clear();
             _tiled = false;
+            for (int k = 0; k < 3; k++) _tileDone[k] = false;
             _picking = false;
             _mode = -1;
             _shown = -1;
@@ -1699,6 +1711,19 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             uint pid;
             Native.GetWindowThreadProcessId(hwnd, out pid);
+
+            // 协同模式：不抢主视图，交给 TileTick 摆到自己的栏里
+            if (_tiled)
+            {
+                _pids[i] = (int)pid;
+                _windows[i] = hwnd;
+                _shown = -1;
+                ApplyBounds();
+                TileTick();
+                SaveSessionNow();
+                Invalidate();
+                return;
+            }
 
             if (!Host.SelfElevated() && Host.LooksElevated((int)pid))
             {
