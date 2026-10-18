@@ -133,6 +133,10 @@ namespace AgentHub
         public const int AW_HOR_NEGATIVE = 0x2;
         [DllImport("user32.dll")] public static extern bool AnimateWindow(IntPtr h, int ms, int flags);
 
+        public const int WM_CLIPBOARDUPDATE = 0x031D;
+        [DllImport("user32.dll")] public static extern bool AddClipboardFormatListener(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool RemoveClipboardFormatListener(IntPtr h);
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 

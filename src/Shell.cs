@@ -529,6 +529,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         }
 
         private Pipeline _pipe;
+        private string _lastCopied = "";
+        private DateTime _pipeAt = DateTime.Now;
 
         private Rectangle PipeButtonRect()
         {
@@ -537,26 +539,71 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             return new Rectangle(_sideW + (cw - w) / 2, (int)(Height * 0.74f), w, h);
         }
 
+        private void PipeCopy(string text)
+        {
+            _lastCopied = text ?? "";
+            try { Clipboard.SetText(_lastCopied); } catch { }
+        }
+
         private void PipeAdvance()
         {
             if (_pipe == null) return;
+            string clip = Clipboard.ContainsText() ? Clipboard.GetText() : "";
             if (!_pipe.Running)
             {
-                string task = Clipboard.ContainsText() ? Clipboard.GetText() : "";
-                if (task.Trim().Length == 0) { Toast.Show("先把需求复制到剪贴板，再点开始"); return; }
-                _pipe.Start(task);
-                Clipboard.SetText(_pipe.ComposePrompt());
+                if (clip.Trim().Length == 0) { Toast.Show("先把需求复制到剪贴板，再点开始"); return; }
+                _pipe.Start(clip);
+                _pipeAt = DateTime.Now;
+                PipeCopy(_pipe.ComposePrompt());
                 Toast.Show("提示词已复制，切到「" + _pipe.Current.Agent + "」粘贴");
             }
             else
             {
-                string output = Clipboard.ContainsText() ? Clipboard.GetText() : "";
-                if (output.Trim().Length == 0) { Toast.Show("先把上一步的回复复制下来"); return; }
-                _pipe.Advance(output);
-                if (_pipe.Running) Clipboard.SetText(_pipe.ComposePrompt());
-                Toast.Show(_pipe.Note);
+                if (clip.Trim().Length == 0) { Toast.Show("先把上一步的回复复制下来"); return; }
+                PipeAdvanceWith(clip);
             }
             Invalidate();
+        }
+
+        private void SavePipeResult()
+        {
+            try
+            {
+                string dir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".scratch");
+                System.IO.Directory.CreateDirectory(dir);
+                string name = "pipeline-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md";
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("# 协同流水线结果").AppendLine();
+                sb.AppendLine("- 结果：" + (_pipe.Done ? "满足，已完成" : "未通过，已中止"));
+                sb.AppendLine("- 轮次：" + _pipe.Round + " / " + _pipe.Config.MaxRounds);
+                sb.AppendLine("- 需求：" + _pipe.Task).AppendLine();
+                sb.AppendLine("## 最后一轮输出").AppendLine().AppendLine(_pipe.LastOutput);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dir, name), sb.ToString(), System.Text.Encoding.UTF8);
+                Toast.Show("结果已存到 .scratch\\" + name);
+            }
+            catch { }
+        }
+
+        private void PipeAdvanceWith(string output)
+        {
+            if (_pipe == null || !_pipe.Running) return;
+            if (output == _lastCopied) return;   // 忽略我们自己写进去的那份
+            _pipe.Advance(output);
+            _pipeAt = DateTime.Now;
+            if (_pipe.Running) PipeCopy(_pipe.ComposePrompt());
+            else SavePipeResult();
+            Toast.Show(_pipe.Note);
+            Invalidate();
+        }
+
+        // 剪贴板一变就看看是不是"这一步的输出复制好了"
+        private void ClipboardChanged()
+        {
+            if (_mode != 1 || _pipe == null || !_pipe.Running) return;
+            string clip;
+            try { clip = Clipboard.ContainsText() ? Clipboard.GetText() : ""; } catch { return; }
+            if (clip.Length == 0 || clip == _lastCopied) return;
+            PipeAdvanceWith(clip);
         }
 
         private void DrawPipeline(Graphics g)
@@ -602,7 +649,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 using (var b = new SolidBrush(Orange))
                     g.FillPath(b, path);
             }
-            string label = !_pipe.Running ? (_pipe.Done || _pipe.Aborted ? "再来一轮" : "开始") : "下一步";
+            string label = !_pipe.Running ? (_pipe.Done || _pipe.Aborted ? "再来一轮" : "开始")
+                : (_pipe.Paused ? "继续" : "下一步");
             using (var f = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, label, f, br, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -843,6 +891,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            Native.AddClipboardFormatListener(Handle);
             for (int i = 0; i < _agents.Count && i < 9; i++)
                 Native.RegisterHotKey(Handle, HotkeyBase + i, Native.MOD_ALT | Native.MOD_NOREPEAT, 0x31 + i);
         }
@@ -850,11 +899,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         protected override void OnHandleDestroyed(EventArgs e)
         {
             for (int i = 0; i < 9; i++) Native.UnregisterHotKey(Handle, HotkeyBase + i);
+            Native.RemoveClipboardFormatListener(Handle);
             base.OnHandleDestroyed(e);
         }
 
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == Native.WM_CLIPBOARDUPDATE) { ClipboardChanged(); return; }
             if (m.Msg == Native.WM_MOUSEACTIVATE) { m.Result = (IntPtr)Native.MA_NOACTIVATE; return; }
             // 点任务栏图标：当作侧栏开关，不真的最小化
             if (m.Msg == 0x0112 && (m.WParam.ToInt32() & 0xFFF0) == 0xF020)
@@ -1103,6 +1154,14 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void HideTick(object sender, EventArgs e)
         {
+            if (_mode == 1 && _pipe != null && _pipe.Running && !_pipe.Paused
+                && (DateTime.Now - _pipeAt).TotalMinutes >= _pipe.Config.StepTimeoutMinutes)
+            {
+                _pipe.Paused = true;
+                _pipe.Note = "已暂停：超过 " + _pipe.Config.StepTimeoutMinutes + " 分钟没有动作";
+                Invalidate();
+            }
+
             if (_hideDue == DateTime.MaxValue) return;
             if (DateTime.Now < _hideDue) return;
             _hideDue = DateTime.MaxValue;

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -77,6 +77,7 @@ namespace AgentHub
         public int Round = 1;
         public int Index;          // 当前步（0 起）
         public bool Running;
+        public bool Paused;
         public bool Done;
         public bool Aborted;
         public string Note = "";
@@ -103,6 +104,7 @@ namespace AgentHub
             Round = 1;
             Index = 0;
             Running = true;
+            Paused = false;
             Done = false;
             Aborted = false;
             Note = "已开始第 1 轮";
@@ -123,6 +125,7 @@ namespace AgentHub
         public void Advance(string output)
         {
             if (!Running) return;
+            Paused = false;
             LastOutput = output ?? "";
 
             if (IsJudgeStep)
