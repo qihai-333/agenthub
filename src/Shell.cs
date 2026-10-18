@@ -247,6 +247,7 @@ namespace AgentHub
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
             if (_pendingIdx >= 0) { _spin = (_spin + 12) % 360; active = true; }
             if (_tiled) { TileTick(); active = true; }
+            if (_tiled && _tileIn < 1f) { _tileIn = Approach(_tileIn, 1f, 0.16f); active = true; }
 
             // 图标位置动画：向目标槽位缓动，延迟用来做"依次弹出"
             for (int k = 0; k < _order.Count; k++)
@@ -544,6 +545,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private Pipeline _pipe;
         private bool _picking;
         private bool _tiled;
+        private float _tileIn;
+        private int _hoverBtn = -1;
         private readonly List<int> _roles = new List<int>();
         private string _lastCopied = "";
         private string _lastAdvance = "";
@@ -553,7 +556,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             int cw = Width - _sideW;
             int w = Px(120), h = Px(64);
-            return new Rectangle(_sideW + (cw - w) / 2 + Px(130), (int)(Height * 0.74f), w, h);
+            return new Rectangle(_sideW + (cw - w) / 2 + Px(140), Height - Px(64), w, h);
         }
 
         private Rectangle PipeEntryRect() { return new Rectangle(ItemXPx, Height - Px(196), ItemSizePx, ItemSizePx); }
@@ -632,7 +635,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             int cw = Width - _sideW;
             int w = Px(240), h = Px(64);
-            return new Rectangle(_sideW + (cw - w) / 2, (int)(Height * 0.74f), w, h);
+            return new Rectangle(_sideW + (cw - w) / 2, Height - Px(64), w, h);
         }
 
         private void PipeCopy(string text)
@@ -703,6 +706,75 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             try { clip = Clipboard.ContainsText() ? Clipboard.GetText() : ""; } catch { return; }
             if (clip.Length == 0 || clip == _lastCopied) return;
             PipeAdvanceWith(clip);
+        }
+
+        private void DrawSynergy(Graphics g)
+        {
+            Rectangle[] rr = TileRects();
+            float k = _tileIn;
+
+            using (var f = new Font("微软雅黑", Px(26), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(TextBlack))
+                g.DrawString("多 agent 协同 · 第 " + (_pipe != null ? _pipe.Round : 1) + " 轮",
+                    f, b, _sideW + Px(20), Px(24));
+
+            for (int i = 0; i < 3 && i < _roles.Count; i++)
+            {
+                bool cur = _pipe != null && _pipe.Running && i == _pipe.Index;
+                Color edge = cur ? Orange : Color.FromArgb(226, 226, 230);
+                Rectangle r = rr[i];
+                Rectangle frame = new Rectangle(r.X - 2, r.Y - 2 + (cur ? Px(-6) : 0), r.Width + 4, r.Height + 4);
+                using (var pen = new Pen(edge, cur ? 2.6f : 1.2f))
+                using (var path = Round(frame, Px(14)))
+                    g.DrawPath(pen, path);
+
+                string label = (i + 1) + "  " + _agents[_roles[i]].Name;
+                using (var f2 = new Font("微软雅黑", Px(16), cur ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b2 = new SolidBrush(cur ? Orange : Color.FromArgb(120, 120, 128)))
+                    g.DrawString(label, f2, b2, r.X + Px(4), r.Y - Px(34) + (cur ? Px(-6) : 0));
+
+                if (i < 2)
+                {
+                    int ax = r.Right + Px(2);
+                    int ay = r.Y + r.Height / 2;
+                    using (var pen = new Pen(Color.FromArgb(200, 200, 206), Math.Max(2f, Px(2))))
+                    {
+                        pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
+                        g.DrawLine(pen, ax, ay, ax + Px(24), ay);
+                        g.DrawLine(pen, ax + Px(16), ay - Px(6), ax + Px(24), ay);
+                        g.DrawLine(pen, ax + Px(16), ay + Px(6), ax + Px(24), ay);
+                    }
+                }
+            }
+
+            // 回环：从第三栏底部绕回第一栏
+            int ly = Height - Px(96);
+            int x1 = rr[0].X + rr[0].Width / 2, x3 = rr[2].X + rr[2].Width / 2;
+            using (var pen = new Pen(Orange, Math.Max(2f, Px(2))))
+            {
+                pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
+                g.DrawLine(pen, x3, Height - Px(150), x3, ly);
+                g.DrawLine(pen, x1, ly, x3, ly);
+                g.DrawLine(pen, x1, Height - Px(150), x1, ly);
+                g.DrawLine(pen, x1, ly - Px(8), x1, ly + Px(8));
+                g.DrawLine(pen, x1 + Px(8), ly - Px(8), x1, ly);
+                g.DrawLine(pen, x1 + Px(8), ly + Px(8), x1, ly);
+            }
+            using (var f = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Orange))
+                g.DrawString("判定不满足 → 回到第 1 步", f, b, x1 + Px(22), ly - Px(30));
+
+            Rectangle br = PipeButtonRect();
+            float sc = 1f + (_hoverBtn == 0 ? 0.04f : 0f) - _pressT * 0.02f;
+            Rectangle sbr = new Rectangle(br.X - (int)(br.Width * (sc - 1) / 2), br.Y - (int)(br.Height * (sc - 1) / 2),
+                (int)(br.Width * sc), (int)(br.Height * sc));
+            using (var path = Round(sbr, Px(16)))
+            using (var b = new SolidBrush(Orange))
+                g.FillPath(b, path);
+            string label2 = !_pipe.Running ? "开始" : (_pipe.Paused ? "继续" : "下一步");
+            using (var f = new Font("微软雅黑", Px(18), FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, label2, f, sbr, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         private void DrawPipeline(Graphics g)
@@ -794,7 +866,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 g.FillRectangle(b, 0, 0, _sideW, Height);
 
             if (Width - _sideW < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
-            if (_mode == 1) { DrawPipeline(g); return; }
+            if (_mode == 1) { if (_tiled) DrawSynergy(g); else DrawPipeline(g); return; }
 
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
