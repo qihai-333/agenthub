@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -389,11 +389,102 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private void DrawEmpty(Graphics g)
         {
             if (_introT <= 0.15f) return;
-            using (var f = new Font("Microsoft YaHei UI", Px(32), FontStyle.Bold, GraphicsUnit.Pixel))
+
+            string text = "开始工作";
+            int em = Px(76);
+
+            GraphicsPath path = null;
+            FontFamily fam = null;
+            try
             {
-                Rectangle r = new Rectangle(_sideW, 0, Math.Max(1, Width - _sideW), Height);
-                TextRenderer.DrawText(g, "开始工作", f, r, Orange,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                try { fam = new FontFamily("等线"); }
+                catch
+                {
+                    try { fam = new FontFamily("微软雅黑"); }
+                    catch { fam = new FontFamily("Microsoft YaHei UI"); }
+                }
+
+                path = new GraphicsPath();
+                path.AddString(text, fam, (int)FontStyle.Bold, em, new PointF(0, 0), StringFormat.GenericTypographic);
+
+                RectangleF b = path.GetBounds();
+                float cx = _sideW + (Math.Max(1, Width - _sideW)) / 2f;
+                float cy = Height / 2f;
+                using (var mtx = new Matrix())
+                {
+                    mtx.Translate(cx - (b.X + b.Width / 2f), cy - (b.Y + b.Height / 2f));
+                    path.Transform(mtx);
+                }
+
+                // 1) 辉光：黑底上看不见黑阴影，用放大的淡橙色叠出光晕
+                for (int s = 3; s >= 1; s--)
+                {
+                    using (var gl = (GraphicsPath)path.Clone())
+                    using (var m = new Matrix())
+                    {
+                        m.Translate(cx, cy);
+                        m.Scale(1f + s * 0.022f, 1f + s * 0.022f);
+                        m.Translate(-cx, -cy);
+                        gl.Transform(m);
+                        using (var br = new SolidBrush(Color.FromArgb(16, 255, 122, 26)))
+                            g.FillPath(br, gl);
+                    }
+                }
+
+                // 2) 挤出：往下复制几层暗橙，做出字的厚度
+                for (int i = 4; i >= 1; i--)
+                {
+                    using (var ex = (GraphicsPath)path.Clone())
+                    {
+                        using (var m = new Matrix())
+                        {
+                            m.Translate(0, i * 1.9f);
+                            ex.Transform(m);
+                        }
+                        using (var br = new SolidBrush(Color.FromArgb(255, 104, 40, 2)))
+                            g.FillPath(br, ex);
+                    }
+                }
+
+                // 3) 主体：上亮下暗的竖向渐变
+                RectangleF gb = path.GetBounds();
+                var rect = new RectangleF(gb.X, gb.Y, gb.Width, gb.Height);
+                using (var lg = new LinearGradientBrush(rect, Color.White, Color.Black, LinearGradientMode.Vertical))
+                {
+                    lg.InterpolationColors = new ColorBlend
+                    {
+                        Colors = new[]
+                        {
+                            Color.FromArgb(255, 205, 138),
+                            Color.FromArgb(255, 126, 28),
+                            Color.FromArgb(206, 78, 6)
+                        },
+                        Positions = new[] { 0f, 0.5f, 1f }
+                    };
+                    g.FillPath(lg, path);
+                }
+
+                // 4) 顶部高光，加一层塑料感
+                Region old = g.Clip;
+                g.SetClip(path, CombineMode.Intersect);
+                var hl = new RectangleF(gb.X, gb.Y, gb.Width, gb.Height * 0.46f);
+                using (var hb = new LinearGradientBrush(hl,
+                    Color.FromArgb(130, 255, 244, 220), Color.FromArgb(0, 255, 244, 220),
+                    LinearGradientMode.Vertical))
+                {
+                    g.FillRectangle(hb, hl);
+                }
+                g.Clip = old;
+
+                // 5) 一条细亮边强化轮廓
+                using (var pen = new Pen(Color.FromArgb(95, 255, 202, 146), Math.Max(1f, Px(1) * 0.9f)))
+                    g.DrawPath(pen, path);
+            }
+            catch { }
+            finally
+            {
+                if (path != null) path.Dispose();
+                if (fam != null) fam.Dispose();
             }
         }
         private void DrawTile(Graphics g, Agent a, Rectangle r)
