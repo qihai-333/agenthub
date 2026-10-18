@@ -1,0 +1,66 @@
+[
+  {
+    "id": "dsh",
+    "name": "DSH 桌面",
+    "short": "DS",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\DeepSeek Harness.exe",
+    "proc": "DeepSeek Harness",
+    "title": "DeepSeek Harness"
+  },
+  {
+    "id": "doubao",
+    "name": "豆包",
+    "short": "豆",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\Doubao.exe",
+    "proc": "Doubao",
+    "title": "豆包"
+  },
+  {
+    "id": "trae",
+    "name": "Trae",
+    "short": "TR",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\Trae CN.exe",
+    "proc": "Trae CN",
+    "title": "Trae"
+  },
+  {
+    "id": "qoder",
+    "name": "Qoder",
+    "short": "QD",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\Qoder CN Launcher.exe",
+    "proc": "Qoder CN,Qoder CN Launcher",
+    "title": "Qoder"
+  },
+  {
+    "id": "workbuddy",
+    "name": "WorkBuddy",
+    "short": "WB",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\WorkBuddy.exe",
+    "proc": "WorkBuddy",
+    "title": "WorkBuddy"
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "short": "CX",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\ChatGPT.lnk",
+    "proc": "ChatGPT",
+    "title": "ChatGPT",
+    "frame": "offset"
+  },
+  {
+    "id": "tabbit",
+    "name": "Tabbit",
+    "short": "TB",
+    "kind": "exe",
+    "exe": "C:\\Path\\To\\Tabbit Browser.exe",
+    "proc": "Tabbit Browser",
+    "title": "Tabbit"
+  }
+]

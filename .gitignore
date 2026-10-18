@@ -1,0 +1,21 @@
+# 构建产物
+bin/
+tools/*.exe
+
+# 运行期数据
+data/
+*.log
+
+# 本机配置（含绝对路径），用 agents.example.json 做模板
+agents.json
+custom.json
+
+# 测试与截图
+test/
+shots/
+
+# 编译中间产物
+*.pdb
+*.user
+*.suo
+.vs/
