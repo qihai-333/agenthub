@@ -396,7 +396,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private static GraphicsPath Round(Rectangle r, int rad)
         {
-            int d = Math.Min(rad * 2, Math.Min(r.Width, r.Height));
+            if (r.Width < 4 || r.Height < 4)
+            {
+                var flat = new GraphicsPath();
+                flat.AddRectangle(new Rectangle(r.X, r.Y, Math.Max(1, r.Width), Math.Max(1, r.Height)));
+                return flat;
+            }
+            int d = Math.Max(2, Math.Min(rad * 2, Math.Min(r.Width, r.Height)));
             var p = new GraphicsPath();
             p.AddArc(r.X, r.Y, d, d, 180, 90);
             p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
@@ -511,7 +517,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
 
             if (interactive && _agents.Count < 18) DrawPlus(g);
-            if (interactive) DrawExit(g, ExitRect(), _hoverExit);
+            if (interactive)
+            {
+                DrawExit(g, ExitRect(), _hoverExit);
+                using (var f = new Font("微软雅黑", Px(15), FontStyle.Bold, GraphicsUnit.Pixel))
+                    TextRenderer.DrawText(g, "协", f, PipeEntryRect(), _mode == 1 ? Orange : TextFaint,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
         }
 
         private int _mode = -1;   // -1 未选，0 普通工作站，1 多 agent 协同
@@ -520,7 +532,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             int cw = Width - _sideW;
             int gap = Px(48);
-            int w = Math.Min(Px(540), (cw - gap * 3) / 2);
+            int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
             int h = Px(300);
             int x0 = _sideW + (cw - (w * 2 + gap)) / 2;
             int y = (int)(Height * 0.42f);
@@ -530,7 +542,30 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private Pipeline _pipe;
         private string _lastCopied = "";
+        private string _lastAdvance = "";
         private DateTime _pipeAt = DateTime.Now;
+
+        private Rectangle PipeResetRect()
+        {
+            int cw = Width - _sideW;
+            int w = Px(120), h = Px(64);
+            return new Rectangle(_sideW + (cw - w) / 2 + Px(130), (int)(Height * 0.74f), w, h);
+        }
+
+        private Rectangle PipeEntryRect() { return new Rectangle(ItemXPx, Height - Px(196), ItemSizePx, ItemSizePx); }
+
+        private void ShowPipelineView()
+        {
+            _mode = 1;
+            _pipe = new Pipeline(PipeConfig.Load());   // 每次都重读，改完 json 立刻生效
+            IntPtr h;
+            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h)) Host.Hide(h);
+            _shown = -1;
+            _hiddenToTray = false;
+            _dockHidden = false;
+            ApplyBounds();
+            Invalidate();
+        }
 
         private Rectangle PipeButtonRect()
         {
@@ -588,6 +623,9 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             if (_pipe == null || !_pipe.Running) return;
             if (output == _lastCopied) return;   // 忽略我们自己写进去的那份
+            if (output.Length < 20) return;      // 顺手复制个单词不该推进
+            if (output == _lastAdvance) return;  // 同一份复制只消费一次
+            _lastAdvance = output;
             _pipe.Advance(output);
             _pipeAt = DateTime.Now;
             if (_pipe.Running) PipeCopy(_pipe.ComposePrompt());
@@ -651,6 +689,14 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
             string label = !_pipe.Running ? (_pipe.Done || _pipe.Aborted ? "再来一轮" : "开始")
                 : (_pipe.Paused ? "继续" : "下一步");
+            Rectangle rr = PipeResetRect();
+            using (var path2 = Round(rr, Px(16)))
+            using (var b2 = new SolidBrush(Color.FromArgb(240, 240, 243)))
+                g.FillPath(b2, path2);
+            using (var f2 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, "重置", f2, rr, Color.FromArgb(90, 90, 98),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
             using (var f = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, label, f, br, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -667,6 +713,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             using (var b = new SolidBrush(SideBg))
                 g.FillRectangle(b, 0, 0, _sideW, Height);
 
+            if (Width - _sideW < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
             if (_mode == 1) { DrawPipeline(g); return; }
 
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
@@ -1002,14 +1049,19 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             {
                 Rectangle ca, cb;
                 CardRects(out ca, out cb);
-                if (ca.Contains(e.Location))
+                if (ca.Contains(e.Location)) { ShowPipelineView(); return; }
+                if (_mode == 1 && PipeButtonRect().Contains(e.Location))
                 {
-                    _mode = 1;
-                    if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());
+                    if (_pipe != null && _pipe.Paused) { _pipe.Paused = false; _pipeAt = DateTime.Now; _pipe.Note = "继续"; Invalidate(); return; }
+                    PipeAdvance();
+                    return;
+                }
+                if (_mode == 1 && PipeResetRect().Contains(e.Location))
+                {
+                    if (_pipe != null) { string keep = _pipe.Task; _pipe = new Pipeline(PipeConfig.Load()); _pipe.Task = keep; }
                     Invalidate();
                     return;
                 }
-                if (_mode == 1 && PipeButtonRect().Contains(e.Location)) { PipeAdvance(); return; }
                 if (cb.Contains(e.Location))
                 {
                     _mode = 0;
@@ -1018,6 +1070,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 }
             }
 
+            if (PipeEntryRect().Contains(e.Location)) { ShowPipelineView(); return; }
             if (ExitRect().Contains(e.Location)) { HideToBackground(); return; }
             if (CollapseRect().Contains(e.Location)) { SetExpanded(false); return; }
             if (_agents.Count < 18 && PlusRect().Contains(e.Location)) { ShowAdd(); return; }
