@@ -728,7 +728,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             if (_dockHidden)
             {
                 // 窗口滑到 x=-89，露在外面的是它右边的 3px
-                if (e.X >= _sideW - 4) ShowDock();
+                // 必须已经完全滑出才认热区：滑行途中窗口左移会让光标落进最后 4px，否则会自己叫回自己
+                if (_slideT > 0.95f && e.X >= _sideW - 4) ShowDock();
                 return;
             }
 
