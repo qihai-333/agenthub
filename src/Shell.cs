@@ -900,21 +900,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void ShowFromBackground()
         {
-            if (!_hiddenToTray) { if (_dockHidden) ShowDock(); return; }
-            _hiddenToTray = false;
-            _dockHidden = false;
-            ReplayDeck();
-            Kick();
-
-            IntPtr h;
-            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h))
-            {
-                _expandT = 0f;
-                Host.Apply(h, Handle, ContentRect(), _agents[_shown].OffsetFrame);
-                Host.ForceForeground(h);
-            }
-            ApplyBounds();
-            Invalidate();
+            ShowDock();
             Program.Log("from background");
         }
 
@@ -951,10 +937,20 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private void ShowDock()
         {
             _hideDue = DateTime.MaxValue;
-            if (!_dockHidden) return;
+            bool was = _dockHidden || _hiddenToTray;
             _dockHidden = false;
-            ReplayDeck();
-            Kick();
+            _hiddenToTray = false;
+            if (was) { ReplayDeck(); Kick(); }
+
+            // 窗口藏起来的时候应用也被隐藏了，唤回时要一起恢复
+            IntPtr h;
+            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h))
+            {
+                _expandT = 0f;
+                Host.Apply(h, Handle, ContentRect(), _agents[_shown].OffsetFrame);
+                Host.ForceForeground(h);
+            }
+            ApplyBounds();
             Invalidate();
         }
 
@@ -968,7 +964,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void ToggleDock()
         {
-            if (_dockHidden) ShowDock(); else HideDock();
+            if (_dockHidden || _hiddenToTray) ShowDock(); else HideToBackground();
         }
 
         // 每次唤出都重放一次"堆叠散开"
