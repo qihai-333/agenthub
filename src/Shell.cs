@@ -1070,7 +1070,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 }
             }
 
-            if (PipeEntryRect().Contains(e.Location)) { ShowPipelineView(); return; }
+            if (PipeEntryRect().Contains(e.Location))
+            {
+                if (_mode == 1) { _mode = -1; Invalidate(); }   // 已在协同：退回模式选择页
+                else ShowPipelineView();
+                return;
+            }
             if (ExitRect().Contains(e.Location)) { HideToBackground(); return; }
             if (CollapseRect().Contains(e.Location)) { SetExpanded(false); return; }
             if (_agents.Count < 18 && PlusRect().Contains(e.Location)) { ShowAdd(); return; }
