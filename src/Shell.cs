@@ -48,7 +48,6 @@ namespace AgentHub
 
         private readonly Timer _poll = new Timer();
         private readonly Timer _health = new Timer();
-        private readonly Timer _fgWatch = new Timer();
         private readonly Timer _anim = new Timer();
 
         private float _introT;
@@ -112,9 +111,6 @@ namespace AgentHub
             _health.Interval = 1000;
             _health.Tick += HealthTick;
             _health.Start();
-            _fgWatch.Interval = 600;
-            _fgWatch.Tick += ForegroundTick;
-            _fgWatch.Start();
             _anim.Interval = 16;
             _anim.Tick += AnimTick;
             _anim.Start();
@@ -375,11 +371,7 @@ namespace AgentHub
             }
 
             if (interactive && _agents.Count < 18) DrawPlus(g);
-            if (interactive)
-            {
-                DrawChevron(g, CollapseRect(), _hoverCollapse);
-                DrawExit(g, ExitRect(), _hoverExit);
-            }
+            if (interactive) DrawExit(g, ExitRect(), _hoverExit);
         }
 
         private void DrawTile(Graphics g, Agent a, Rectangle r)
@@ -456,13 +448,11 @@ namespace AgentHub
             base.OnHandleCreated(e);
             for (int i = 0; i < _agents.Count && i < 9; i++)
                 Native.RegisterHotKey(Handle, HotkeyBase + i, Native.MOD_ALT | Native.MOD_NOREPEAT, 0x31 + i);
-            Native.RegisterHotKey(Handle, HotkeyToggle, Native.MOD_ALT | Native.MOD_NOREPEAT, 0xC0);
         }
 
         protected override void OnHandleDestroyed(EventArgs e)
         {
             for (int i = 0; i < 9; i++) Native.UnregisterHotKey(Handle, HotkeyBase + i);
-            Native.UnregisterHotKey(Handle, HotkeyToggle);
             base.OnHandleDestroyed(e);
         }
 
@@ -472,7 +462,6 @@ namespace AgentHub
             if (m.Msg == Native.WM_HOTKEY)
             {
                 int id = m.WParam.ToInt32();
-                if (id == HotkeyToggle) { SetExpanded(!_expanded); return; }
                 if (id >= HotkeyBase && id < HotkeyBase + _agents.Count) { LeftClick(id - HotkeyBase); return; }
             }
             base.WndProc(ref m);
@@ -564,11 +553,7 @@ namespace AgentHub
 
         public void SetExpanded(bool value)
         {
-            if (value == _expanded) return;
-            _expanded = value;
-            _hover = -1; _hoverCollapse = false; _hoverStrip = false;
-            Kick();
-            Invalidate();
+            // 侧栏固定展开：不再收起，右侧应用区域也就不会跟着移动
         }
 
         // ---------- 名额与切换 ----------
@@ -884,25 +869,6 @@ namespace AgentHub
             }
         }
 
-        private void ForegroundTick(object sender, EventArgs e)
-        {
-            if (_collapseMoving) return;
-            IntPtr fg = Native.GetForegroundWindow();
-            bool mine = fg == Handle;
-            bool agentFg = false;
-            foreach (IntPtr h in _windows.Values)
-                if (h == fg) { agentFg = true; break; }
-
-            if (mine || agentFg)
-            {
-                if (!_expanded) SetExpanded(true);
-            }
-            else if (_expanded && _hover < 0)
-            {
-                SetExpanded(false);
-            }
-        }
-
         private void RepositionShown()
         {
             IntPtr h;
@@ -916,7 +882,7 @@ namespace AgentHub
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            _poll.Stop(); _health.Stop(); _fgWatch.Stop(); _anim.Stop(); _restoreTimer.Stop();
+            _poll.Stop(); _health.Stop(); _anim.Stop(); _restoreTimer.Stop();
             SaveSessionNow();
 
             foreach (int i in new List<int>(_chosen))
