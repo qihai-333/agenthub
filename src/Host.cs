@@ -389,6 +389,8 @@ namespace AgentHub
         public static bool Apply(IntPtr hwnd, IntPtr shell, Rectangle rect, bool offsetFrame)
         {
             Takeover t;
+            // Host.Hide 用 SW_HIDE 藏过，切回来必须显式显示；这一步与"是否首次接管"无关
+            Native.ShowWindow(hwnd, Native.SW_SHOW);
             bool first = !Map.TryGetValue(hwnd, out t);
             if (first)
             {
@@ -400,6 +402,7 @@ namespace AgentHub
                 t.Style = Native.GetWindowLong(hwnd, Native.GWL_STYLE);
                 t.ExStyle = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
 
+                Native.ShowWindow(hwnd, Native.SW_SHOW);   // 先还原尺寸再接管
                 if (Native.IsIconic(hwnd) || (t.Style & WS_MAXIMIZE) != 0)
                 {
                     Native.ShowWindow(hwnd, Native.SW_RESTORE);
