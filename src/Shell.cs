@@ -891,7 +891,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             foreach (int i in _chosen)
             {
                 IntPtr h;
-                if (_windows.TryGetValue(i, out h) && h != IntPtr.Zero) Host.Hide(h);
+                if (_windows.TryGetValue(i, out h) && h != IntPtr.Zero && Native.IsWindow(h))
+                {
+                    // 跟侧栏同向滑出，而不是"啪"一下消失
+                    if (!Native.AnimateWindow(h, 220, Native.AW_HIDE | Native.AW_SLIDE | Native.AW_HOR_NEGATIVE))
+                        Host.Hide(h);
+                }
             }
             _dockHidden = true;
             Kick();
@@ -950,6 +955,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 _expandT = 0f;
                 Host.Apply(h, Handle, ContentRect(), _agents[_shown].OffsetFrame);
                 Host.ForceForeground(h);
+                if (was) Native.AnimateWindow(h, 220, Native.AW_ACTIVATE | Native.AW_SLIDE | Native.AW_HOR_POSITIVE);
             }
             ApplyBounds();
             Invalidate();

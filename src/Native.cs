@@ -126,6 +126,13 @@ namespace AgentHub
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
         [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint ms);
 
+        public const int AW_HIDE = 0x10000;
+        public const int AW_ACTIVATE = 0x20000;
+        public const int AW_SLIDE = 0x40000;
+        public const int AW_HOR_POSITIVE = 0x1;
+        public const int AW_HOR_NEGATIVE = 0x2;
+        [DllImport("user32.dll")] public static extern bool AnimateWindow(IntPtr h, int ms, int flags);
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
