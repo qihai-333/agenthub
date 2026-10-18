@@ -246,7 +246,7 @@ namespace AgentHub
             if (_pressT > 0f) { _pressT = Approach(_pressT, 0f, 0.30f); active = true; }
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
             if (_pendingIdx >= 0) { _spin = (_spin + 12) % 360; active = true; }
-            if (_tiled) { TileTick(); active = true; }
+            if (_tiled) { TileTick(); UpdateThumbs(); active = true; }
             if (_tiled && _tileIn < 1f) { _tileIn = Approach(_tileIn, 1f, 0.16f); active = true; }
 
             // 图标位置动画：向目标槽位缓动，延迟用来做"依次弹出"
@@ -547,6 +547,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private bool _tiled;
         private float _tileIn;
         private readonly bool[] _tileDone = new bool[3];
+        private readonly IntPtr[] _thumbs = new IntPtr[3];
+        private int _focusIdx = -1;
         private int _hoverBtn = -1;
         private readonly List<int> _roles = new List<int>();
         private string _lastCopied = "";
@@ -576,25 +578,81 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             return r;
         }
 
+        private void UpdateThumbs()
+        {
+            if (_roles.Count < 3) return;
+            Rectangle[] rr = TileRects();
+            for (int k = 0; k < 3; k++)
+            {
+                if (_thumbs[k] == IntPtr.Zero)
+                {
+                    IntPtr h;
+                    if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) continue;
+                    IntPtr th;
+                    if (Native.DwmRegisterThumbnail(Handle, h, out th) != 0) continue;
+                    _thumbs[k] = th;
+                }
+                var props = new Native.DWM_THUMBNAIL_PROPERTIES();
+                props.dwFlags = Native.DWM_TNP_RECTDESTINATION | Native.DWM_TNP_VISIBLE | Native.DWM_TNP_OPACITY;
+                props.rcDestination = new Native.RECT();
+                props.rcDestination.Left = rr[k].X + 4;
+                props.rcDestination.Top = rr[k].Y + 4;
+                props.rcDestination.Right = rr[k].Right - 4;
+                props.rcDestination.Bottom = rr[k].Bottom - 4;
+                props.opacity = 255;
+                props.fVisible = _focusIdx < 0;
+                Native.DwmUpdateThumbnailProperties(_thumbs[k], ref props);
+            }
+        }
+
+        private void ParkOffscreen(int k, bool off)
+        {
+            if (k < 0 || k >= _roles.Count) return;
+            IntPtr h;
+            if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) return;
+            Native.ShowWindow(h, Native.SW_SHOW);
+            if (off)
+            {
+                Rectangle scr = Screen.PrimaryScreen.WorkingArea;
+                Native.SetWindowPos(h, Handle, scr.Width + 200, 0, 0, 0,
+                    Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            }
+        }
+
+        private void FocusTile(int k)
+        {
+            IntPtr h;
+            if (k < 0 || k >= _roles.Count) return;
+            if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) return;
+            _focusIdx = k;
+            _tileDone[k] = false;
+            Host.Apply(h, Handle, ContentRect(), _agents[_roles[k]].OffsetFrame);
+            Native.SetWindowPos(h, (IntPtr)0, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            Host.ForceForeground(h);
+            ApplyBounds();
+            Invalidate();
+        }
+
+        private void BackToGrid()
+        {
+            if (_focusIdx >= 0) ParkOffscreen(_focusIdx, true);
+            _focusIdx = -1;
+            ApplyBounds();
+            Invalidate();
+        }
+
         private void TileTick()
         {
-            if (!_tiled) return;
-            Rectangle[] rr = TileRects();
-            for (int k = 0; k < _roles.Count && k < 3; k++)
+            if (!_tiled || _focusIdx >= 0 || _roles.Count < 3) return;
+            Rectangle scr = Screen.PrimaryScreen.WorkingArea;
+            for (int k = 0; k < 3; k++)
             {
-                int idx = _roles[k];
                 IntPtr h;
-                if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h)) continue;
-                if (_tileDone[k]) continue;
-                bool ok = Host.Apply(h, Handle, rr[k], _agents[idx].OffsetFrame);
-                if (ok)
-                {
-                    // 关键：把应用窗口提到我们画布之上，否则全屏画布会盖住它
-                    Native.SetWindowPos(h, (IntPtr)0, 0, 0, 0, 0,
-                        Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
-                    _tileDone[k] = true;
-                }
-                Program.Log("tile " + _agents[idx].Id + " ok=" + ok);
+                if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) continue;
+                Native.RECT r;
+                if (!Native.GetWindowRect(h, out r)) continue;
+                if (r.Left < scr.Width) ParkOffscreen(k, true);   // 还在屏幕内就挪出去
             }
         }
 
@@ -610,7 +668,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
             _shown = -1;
             _tiled = true;
-            for (int k = 0; k < 3; k++) _tileDone[k] = false;
+            _focusIdx = -1;
+            for (int k = 0; k < 3; k++) { _tileDone[k] = false; _thumbs[k] = IntPtr.Zero; }
             ApplyBounds();
             Invalidate();
         }
@@ -1214,7 +1273,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 Rectangle ca, cb;
                 CardRects(out ca, out cb);
                 if (ca.Contains(e.Location)) { ShowPipelineView(); return; }
-                if (_mode == 1 && PipeButtonRect().Contains(e.Location))
+                if (_mode == 1 && _tiled && _focusIdx < 0)
+                {
+                    Rectangle[] tr = TileRects();
+                    for (int k = 0; k < 3; k++) if (tr[k].Contains(e.Location)) { FocusTile(k); return; }
+                }
+            if (_mode == 1 && PipeButtonRect().Contains(e.Location))
                 {
                     if (_pipe != null && _pipe.Paused) { _pipe.Paused = false; _pipeAt = DateTime.Now; _pipe.Note = "继续"; Invalidate(); return; }
                     PipeAdvance();
@@ -1236,7 +1300,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (PipeEntryRect().Contains(e.Location))
             {
-                if (_mode == 1) { ExitSynergy(); }   // 已在协同：关掉三个角色，退回模式选择页
+                if (_mode == 1 && _focusIdx >= 0) { BackToGrid(); }
+                else if (_mode == 1) { ExitSynergy(); }
                 else ShowPipelineView();
                 return;
             }
@@ -1719,7 +1784,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 _windows[i] = hwnd;
                 _shown = -1;
                 ApplyBounds();
-                TileTick();
+                for (int k = 0; k < _roles.Count; k++) if (_roles[k] == i) ParkOffscreen(k, true);
                 SaveSessionNow();
                 Invalidate();
                 return;

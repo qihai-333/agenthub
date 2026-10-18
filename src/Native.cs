@@ -133,6 +133,23 @@ namespace AgentHub
         public const int AW_HOR_NEGATIVE = 0x2;
         [DllImport("user32.dll")] public static extern bool AnimateWindow(IntPtr h, int ms, int flags);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct DWM_THUMBNAIL_PROPERTIES
+        {
+            public int dwFlags;
+            public RECT rcDestination;
+            public RECT rcSource;
+            public byte opacity;
+            [MarshalAs(UnmanagedType.Bool)] public bool fVisible;
+            [MarshalAs(UnmanagedType.Bool)] public bool fSourceClientAreaOnly;
+        }
+        public const int DWM_TNP_RECTDESTINATION = 0x1;
+        public const int DWM_TNP_OPACITY = 0x4;
+        public const int DWM_TNP_VISIBLE = 0x8;
+        [DllImport("dwmapi.dll")] public static extern int DwmRegisterThumbnail(IntPtr dest, IntPtr src, out IntPtr thumb);
+        [DllImport("dwmapi.dll")] public static extern int DwmUnregisterThumbnail(IntPtr thumb);
+        [DllImport("dwmapi.dll")] public static extern int DwmUpdateThumbnailProperties(IntPtr thumb, ref DWM_THUMBNAIL_PROPERTIES props);
+
         public const int WM_CLIPBOARDUPDATE = 0x031D;
         [DllImport("user32.dll")] public static extern bool AddClipboardFormatListener(IntPtr h);
         [DllImport("user32.dll")] public static extern bool RemoveClipboardFormatListener(IntPtr h);
