@@ -243,7 +243,8 @@ namespace AgentHub
 
         private void ApplyBounds()
         {
-            Rectangle scr = Screen.PrimaryScreen.WorkingArea;
+            if (!IsHandleCreated || IsDisposed) return;
+Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             // 没有显示任何应用时铺满工作区（黑底 + 开始工作），有应用时只占侧栏
             int w = _shown >= 0 ? Math.Max(SideCollapsedPx, _sideW) : scr.Width;
             if (Bounds.Width != w || Bounds.X != scr.X || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
@@ -539,15 +540,15 @@ namespace AgentHub
                 {
                     int k = ri;
                     labels.Add("取消「" + _agents[k].Name + "」");
-                    acts.Add(delegate { Cancel(k); });
+                    acts.Add(Defer(delegate { Cancel(k); }));
                 }
                 if (_agents[ri].Custom)
                 {
                     int k = ri;
                     labels.Add("编辑");
-                    acts.Add(delegate { ShowEdit(k); });
+                    acts.Add(Defer(delegate { ShowEdit(k); }));
                     labels.Add("移除");
-                    acts.Add(delegate { RemoveAgent(k); });
+                    acts.Add(Defer(delegate { RemoveAgent(k); }));
                 }
                 if (labels.Count == 0) return;
 
@@ -579,7 +580,26 @@ namespace AgentHub
 
         // ---------- 名额与切换 ----------
 
+        // 菜单里的动作不能在菜单自己的消息处理里执行：
+        // 那时 Close() 已经把菜单销毁，而"取消最后一个应用"会把主窗口从 92px 撑满屏幕，
+        // 两者叠在一起会让 WinForms 在已释放的窗口上收尾时抛异常。
+        private Action Defer(Action a)
+        {
+            return delegate
+            {
+                try { BeginInvoke(a); }
+                catch { try { a(); } catch { } }
+            };
+        }
+
         public void Select(int idx) { LeftClick(idx); }
+
+        public string AgentIdAt(int i) { return (i >= 0 && i < _agents.Count) ? _agents[i].Id : null; }
+
+        public void CancelById(string id)
+        {
+            for (int i = 0; i < _agents.Count; i++) if (_agents[i].Id == id) { Cancel(i); return; }
+        }
 
         // ---------- 会话与自定义 ----------
 

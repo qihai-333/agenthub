@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -106,6 +106,7 @@ namespace AgentHub
 
                 Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e)
                 {
+                    Log("EXCEPTION " + e.Exception.ToString());
                     Host.ReleaseAll();
                     MessageBox.Show("程序遇到错误，已尝试还原被接管的窗口：\r\n\r\n" + e.Exception.Message,
                         "AGENT HUB", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -114,6 +115,8 @@ namespace AgentHub
 
                 AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
                 {
+                    Exception ex = e.ExceptionObject as Exception;
+                    Log("UNHANDLED " + (ex != null ? ex.ToString() : "?"));
                     Host.ReleaseAll();
                 };
 
@@ -236,6 +239,16 @@ namespace AgentHub
                         kick.Interval = 600;
                         kick.Tick += delegate { kick.Stop(); shell.Select(selftestIndex); };
                         kick.Start();
+
+                        int cancelMs = -1;
+                        if (args != null)
+                            for (int i = 0; i < args.Length; i++)
+                                if (args[i] == "--cancel-after" && i + 1 < args.Length) int.TryParse(args[i + 1], out cancelMs);
+                        if (cancelMs > 0)
+                        {
+                            string cid = shell.AgentIdAt(selftestIndex);
+                            Schedule(cancelMs, delegate { Log("TEST cancel " + cid); shell.CancelById(cid); });
+                        }
                     }
 
                     var shot = new System.Windows.Forms.Timer();

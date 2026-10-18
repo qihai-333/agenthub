@@ -99,8 +99,23 @@ namespace AgentHub
             int i = RowAt(e.Y);
             if (i < 0) return;
             Action act = _actions[i];
-            Close();
-            if (act != null) act();
+
+            // 不要在鼠标消息的处理栈里 Close() + 执行动作：
+            // 动作可能把主窗口从 92px 撑满屏幕，而此时本窗口正在销毁，
+            // WinForms 收尾时会碰到已释放的对象。先让这条消息处理完再说。
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    Close();
+                    if (act != null) act();
+                });
+            }
+            catch
+            {
+                Close();
+                if (act != null) act();
+            }
         }
 
         protected override void OnDeactivate(EventArgs e)
