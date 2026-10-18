@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -11,7 +11,7 @@ namespace AgentHub
 {
     internal static class Program
     {
-        private static readonly string LogPath =
+        internal static readonly string LogPath =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "app.log");
 
         internal static void Log(string s)

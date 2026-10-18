@@ -65,6 +65,11 @@ namespace AgentHub
         private DateTime _hideDue = DateTime.MaxValue;
         private readonly Timer _hideTimer = new Timer();
 
+        // 关到后台：窗口滑出、应用隐藏、进程继续，靠托盘或左边缘叫回来
+        private NotifyIcon _tray;
+        private bool _hiddenToTray;
+        private bool _reallyExit;
+
         private readonly List<string> _restore = new List<string>();
         private DateTime _restoreAt;
         private readonly Timer _restoreTimer = new Timer();
@@ -128,6 +133,7 @@ namespace AgentHub
             _hideTimer.Interval = 250;
             _hideTimer.Tick += HideTick;
             _hideTimer.Start();
+            SetupTray();
 
             string shownId;
             List<string> ids;
@@ -307,9 +313,9 @@ namespace AgentHub
             if (!IsHandleCreated || IsDisposed) return;
 Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             // 没有显示任何应用时铺满工作区（黑底 + 开始工作），有应用时只占侧栏
-            int w = _shown >= 0 ? Math.Max(3, _sideW) : scr.Width;
+            int w = (_hiddenToTray || _shown >= 0) ? Math.Max(3, _sideW) : scr.Width;
             int x = scr.X;
-            if (_shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - 3));
+            if (_hiddenToTray || _shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - 3));
             if (Bounds.Width != w || Bounds.X != x || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
                 Bounds = new Rectangle(x, scr.Y, w, scr.Height);
         }
@@ -755,7 +761,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             base.OnMouseLeave(e);
             _hover = -1; _hoverCollapse = false; _hoverExit = false; _hoverStrip = false;
             Cursor = Cursors.Default;
-            ScheduleHide(1500);   // 鼠标离开一会儿就滑出去
             Invalidate();
         }
 
@@ -792,7 +797,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (e.Button != MouseButtons.Left) return;
             if (!_expanded) { SetExpanded(true); return; }
-            if (ExitRect().Contains(e.Location)) { Close(); return; }
+            if (ExitRect().Contains(e.Location)) { HideToBackground(); return; }
             if (CollapseRect().Contains(e.Location)) { SetExpanded(false); return; }
             if (_agents.Count < 18 && PlusRect().Contains(e.Location)) { ShowAdd(); return; }
 
@@ -855,6 +860,86 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             ShowDock();
         }
 
+        // ---------- 托盘 / 后台 ----------
+
+        private void SetupTray()
+        {
+            _tray = new NotifyIcon();
+            try { _tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { _tray.Icon = SystemIcons.Application; }
+            _tray.Text = "AGENT HUB";
+            _tray.Visible = true;
+            _tray.MouseClick += delegate(object s, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) ShowFromBackground();
+            };
+
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("显示", null, delegate { BeginInvoke((MethodInvoker)ShowFromBackground); });
+            menu.Items.Add("重新加载", null, delegate { BeginInvoke((MethodInvoker)ReloadApp); });
+            menu.Items.Add("打开日志", null, delegate { BeginInvoke((MethodInvoker)OpenLog); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("退出", null, delegate { BeginInvoke((MethodInvoker)QuitApp); });
+            _tray.ContextMenuStrip = menu;
+        }
+
+        private void HideToBackground()
+        {
+            if (_hiddenToTray) return;
+            _hiddenToTray = true;
+            foreach (int i in _chosen)
+            {
+                IntPtr h;
+                if (_windows.TryGetValue(i, out h) && h != IntPtr.Zero) Host.Hide(h);
+            }
+            _dockHidden = true;
+            Kick();
+            SaveSessionNow();
+            Program.Log("to background");
+        }
+
+        private void ShowFromBackground()
+        {
+            if (!_hiddenToTray) { if (_dockHidden) ShowDock(); return; }
+            _hiddenToTray = false;
+            _dockHidden = false;
+            ReplayDeck();
+            Kick();
+
+            IntPtr h;
+            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h))
+            {
+                _expandT = 0f;
+                Host.Apply(h, Handle, ContentRect(), _agents[_shown].OffsetFrame);
+                Host.ForceForeground(h);
+            }
+            ApplyBounds();
+            Invalidate();
+            Program.Log("from background");
+        }
+
+        private void OpenLog()
+        {
+            try { Process.Start("notepad.exe", "\"" + Program.LogPath + "\""); } catch { }
+        }
+
+        private void ReloadApp()
+        {
+            Program.Log("reload requested");
+            try
+            {
+                Process.Start("cmd.exe", "/c timeout /t 2 >nul & start \"\" \"" + Application.ExecutablePath + "\"");
+            }
+            catch { }
+            QuitApp();
+        }
+
+        private void QuitApp()
+        {
+            _reallyExit = true;
+            Close();
+        }
+
         private void HideTick(object sender, EventArgs e)
         {
             if (_hideDue == DateTime.MaxValue) return;
@@ -877,7 +962,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             _hideDue = DateTime.MaxValue;
             if (_dockHidden) return;
-            if (_shown < 0) return;   // 没打开应用时，侧栏就是画面本身
             _dockHidden = true;
             Kick();
         }
@@ -1083,7 +1167,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             _shown = i;
             MoveToFront(i);
             ApplyBounds();
-            ScheduleHide(350);
             _expandT = 0f;
             Kick();
 
@@ -1183,7 +1266,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             MarkSplash(_agents[i].Id, "就绪", 2);
             MoveToFront(i);
             ApplyBounds();
-            ScheduleHide(350);
 
             if (!Host.Apply(hwnd, Handle, ContentRect(), _agents[i].OffsetFrame))
             {
@@ -1288,6 +1370,14 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (!_reallyExit)
+            {
+                // 点 × / 任务栏关闭 = 关到后台，不是退出
+                e.Cancel = true;
+                HideToBackground();
+                return;
+            }
+
             _poll.Stop(); _health.Stop(); _anim.Stop(); _restoreTimer.Stop();
             SaveSessionNow();
 
@@ -1304,6 +1394,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             IntPtr h;
             if (_shown >= 0 && _windows.TryGetValue(_shown, out h)) Host.Hide(h);
             Host.ReleaseAll();
+            if (_tray != null) { _tray.Visible = false; _tray.Dispose(); _tray = null; }
             base.OnFormClosing(e);
         }
     }
