@@ -528,12 +528,98 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             b = new Rectangle(x0 + w + gap, y, w, h);
         }
 
+        private Pipeline _pipe;
+
+        private Rectangle PipeButtonRect()
+        {
+            int cw = Width - _sideW;
+            int w = Px(240), h = Px(64);
+            return new Rectangle(_sideW + (cw - w) / 2, (int)(Height * 0.74f), w, h);
+        }
+
+        private void PipeAdvance()
+        {
+            if (_pipe == null) return;
+            if (!_pipe.Running)
+            {
+                string task = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+                if (task.Trim().Length == 0) { Toast.Show("先把需求复制到剪贴板，再点开始"); return; }
+                _pipe.Start(task);
+                Clipboard.SetText(_pipe.ComposePrompt());
+                Toast.Show("提示词已复制，切到「" + _pipe.Current.Agent + "」粘贴");
+            }
+            else
+            {
+                string output = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+                if (output.Trim().Length == 0) { Toast.Show("先把上一步的回复复制下来"); return; }
+                _pipe.Advance(output);
+                if (_pipe.Running) Clipboard.SetText(_pipe.ComposePrompt());
+                Toast.Show(_pipe.Note);
+            }
+            Invalidate();
+        }
+
+        private void DrawPipeline(Graphics g)
+        {
+            if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());
+
+            int cw = Width - _sideW;
+            int x = _sideW + Px(80);
+
+            using (var f = new Font("微软雅黑", Px(40), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(TextBlack))
+                g.DrawString("多 agent 协同 · 第 " + _pipe.Round + " 轮", f, b, x, Height * 0.16f);
+
+            int y = (int)(Height * 0.28f);
+            for (int i = 0; i < _pipe.StepCount; i++)
+            {
+                PipeStep s = _pipe.Config.Steps[i];
+                bool cur = _pipe.Running && i == _pipe.Index;
+                bool passed = _pipe.Running ? i < _pipe.Index : _pipe.Done;
+
+                if (cur)
+                    using (var b = new SolidBrush(Orange))
+                        g.FillRectangle(b, x - Px(18), y + Px(4), Px(5), Px(30));
+
+                using (var f = new Font("微软雅黑", Px(22), cur ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(cur ? Orange : (passed ? Color.FromArgb(150, 150, 158) : TextBlack)))
+                    g.DrawString((i + 1) + "  " + s.Role, f, b, x, y);
+
+                using (var f2 = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b2 = new SolidBrush(Color.FromArgb(160, 160, 168)))
+                    g.DrawString(s.Agent, f2, b2, x + Px(260), y + Px(8));
+
+                y += Px(56);
+            }
+
+            using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(110, 110, 118)))
+                g.DrawString(_pipe.Note.Length > 0 ? _pipe.Note : "把需求复制到剪贴板，点开始", f, b, x, Height * 0.60f);
+
+            Rectangle br = PipeButtonRect();
+            using (var path = Round(br, Px(16)))
+            {
+                using (var b = new SolidBrush(Orange))
+                    g.FillPath(b, path);
+            }
+            string label = !_pipe.Running ? (_pipe.Done || _pipe.Aborted ? "再来一轮" : "开始") : "下一步";
+            using (var f = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, label, f, br, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+            using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(170, 170, 176)))
+                g.DrawString("每步完成后复制应用里的回复，再点下一步", f, b, x, br.Bottom + Px(16));
+        }
+
         private void DrawModeChooser(Graphics g)
         {
             g.Clear(Color.White);
 
             using (var b = new SolidBrush(SideBg))
                 g.FillRectangle(b, 0, 0, _sideW, Height);
+
+            if (_mode == 1) { DrawPipeline(g); return; }
 
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
@@ -868,10 +954,11 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 if (ca.Contains(e.Location))
                 {
                     _mode = 1;
-                    Toast.Show("协同模式：流水线还没接上，界面先就位");
+                    if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());
                     Invalidate();
                     return;
                 }
+                if (_mode == 1 && PipeButtonRect().Contains(e.Location)) { PipeAdvance(); return; }
                 if (cb.Contains(e.Location))
                 {
                     _mode = 0;
