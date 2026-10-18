@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -1147,7 +1147,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             foreach (int i in new List<int>(_chosen))
             {
-                if (i == _shown) continue;
                 int pid;
                 if (_pids.TryGetValue(i, out pid))
                 {
