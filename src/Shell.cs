@@ -244,7 +244,8 @@ namespace AgentHub
         private void ApplyBounds()
         {
             Rectangle scr = Screen.PrimaryScreen.WorkingArea;
-            int w = Math.Max(SideCollapsedPx, _sideW);
+            // 没有显示任何应用时铺满工作区（黑底 + 开始工作），有应用时只占侧栏
+            int w = _shown >= 0 ? Math.Max(SideCollapsedPx, _sideW) : scr.Width;
             if (Bounds.Width != w || Bounds.X != scr.X || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
                 Bounds = new Rectangle(scr.X, scr.Y, w, scr.Height);
         }
@@ -283,7 +284,7 @@ namespace AgentHub
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(SideBg);
+            g.Clear(_shown >= 0 ? SideBg : Bg);
 
             if (_sideW <= SideCollapsedPx + 1)
             {
@@ -294,6 +295,8 @@ namespace AgentHub
 
             g.FillRectangle(_bSide, 0, 0, _sideW, Height);
             g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
+
+            if (_shown < 0) DrawEmpty(g);
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
@@ -382,6 +385,16 @@ namespace AgentHub
             if (interactive) DrawExit(g, ExitRect(), _hoverExit);
         }
 
+        private void DrawEmpty(Graphics g)
+        {
+            if (_introT <= 0.15f) return;
+            using (var f = new Font("Microsoft YaHei UI", Px(32), FontStyle.Bold, GraphicsUnit.Pixel))
+            {
+                Rectangle r = new Rectangle(_sideW, 0, Math.Max(1, Width - _sideW), Height);
+                TextRenderer.DrawText(g, "开始工作", f, r, Orange,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
         private void DrawTile(Graphics g, Agent a, Rectangle r)
         {
             int sz = Px(36);
@@ -706,6 +719,7 @@ namespace AgentHub
 
             IntPtr old = ActiveHandle;
             _shown = i;
+            ApplyBounds();
             _expandT = 0f;
             Kick();
 
@@ -718,6 +732,7 @@ namespace AgentHub
             {
                 if (old != IntPtr.Zero && old != h) { _shown = IndexOfWindow(old); }
                 else _shown = -1;
+                ApplyBounds();
                 Toast.Show("「" + _agents[i].Name + "」的窗口拒绝被接管");
             }
             Invalidate();
@@ -790,17 +805,24 @@ namespace AgentHub
                 return;
             }
 
+            // 先把自己缩成侧栏，否则铺满的窗口会盖住刚要显示的应用
+            _pids[i] = (int)pid;
+            _windows[i] = hwnd;
+            _shown = i;
+            ApplyBounds();
+
             if (!Host.Apply(hwnd, Handle, ContentRect(), _agents[i].OffsetFrame))
             {
                 _chosen.Remove(i);
+                _pids.Remove(i);
+                _windows.Remove(i);
+                _shown = old == IntPtr.Zero ? -1 : IndexOfWindow(old);
+                ApplyBounds();
                 Toast.Show("「" + _agents[i].Name + "」的窗口拒绝被接管");
                 Invalidate();
                 return;
             }
 
-            _pids[i] = (int)pid;
-            _windows[i] = hwnd;
-            _shown = i;
             SaveSessionNow();
             _expandT = 0f;
             Kick();
@@ -829,6 +851,7 @@ namespace AgentHub
             if (_pendingIdx == i) { _pendingIdx = -1; _poll.Stop(); }
 
             Program.Log("cancel " + _agents[i].Id);
+            ApplyBounds();
             SaveSessionNow();
             Invalidate();
         }
@@ -871,6 +894,7 @@ namespace AgentHub
                 _pids.Remove(i);
                 _dead.Remove(i);
                 if (_shown == i) _shown = -1;
+                ApplyBounds();
                 Toast.Show("「" + _agents[i].Name + "」已关闭，名额已释放");
                 SaveSessionNow();
                 Invalidate();
