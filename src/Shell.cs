@@ -422,7 +422,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             g.FillRectangle(_bSide, 0, 0, _sideW, Height);
             g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
 
-            if (_shown < 0) DrawEmpty(g);
+            if (_shown < 0) DrawModeChooser(g);
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
@@ -512,6 +512,69 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (interactive && _agents.Count < 18) DrawPlus(g);
             if (interactive) DrawExit(g, ExitRect(), _hoverExit);
+        }
+
+        private int _mode = -1;   // -1 未选，0 普通工作站，1 多 agent 协同
+
+        private void CardRects(out Rectangle a, out Rectangle b)
+        {
+            int cw = Width - _sideW;
+            int gap = Px(48);
+            int w = Math.Min(Px(540), (cw - gap * 3) / 2);
+            int h = Px(300);
+            int x0 = _sideW + (cw - (w * 2 + gap)) / 2;
+            int y = (int)(Height * 0.42f);
+            a = new Rectangle(x0, y, w, h);
+            b = new Rectangle(x0 + w + gap, y, w, h);
+        }
+
+        private void DrawModeChooser(Graphics g)
+        {
+            g.Clear(Color.White);
+
+            using (var b = new SolidBrush(SideBg))
+                g.FillRectangle(b, 0, 0, _sideW, Height);
+
+            using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center })
+            {
+                var r = new RectangleF(_sideW, Height * 0.25f, Width - _sideW, Px(90));
+                // 阴影
+                for (int i = 9; i >= 1; i--)
+                using (var br = new SolidBrush(Color.FromArgb(20, 0, 0, 0)))
+                    g.DrawString("选择你的工作模式", f, br,
+                        new RectangleF(r.X, r.Y + i * 1.2f, r.Width, r.Height), sf);
+                g.DrawString("选择你的工作模式", f, new SolidBrush(Color.FromArgb(24, 24, 28)), r, sf);
+            }
+
+            Rectangle ca, cb;
+            CardRects(out ca, out cb);
+            DrawModeCard(g, ca, "多 agent 协同模式", "拆解 → 编码 → 审查，三个 agent 接力", _mode == 1);
+            DrawModeCard(g, cb, "普通工作站模式", "一次专注一个，切换即换", _mode == 0);
+        }
+
+        private static readonly Color TextBlack = Color.FromArgb(20, 20, 24);
+
+        private void DrawModeCard(Graphics g, Rectangle r, string title, string sub, bool selected)
+        {
+            using (GraphicsPath p = Round(r, Px(18)))
+            {
+                using (var pen = new Pen(selected ? Orange : Color.FromArgb(224, 224, 228), selected ? 2.4f : 1.2f))
+                    g.DrawPath(pen, p);
+            }
+
+            using (var f = new Font("微软雅黑", Px(26), FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, title, f, new Rectangle(r.X + Px(24), r.Y + Px(28), r.Width - Px(48), Px(40)),
+                    TextBlack, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+
+            using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, sub, f, new Rectangle(r.X + Px(24), r.Y + Px(74), r.Width - Px(48), Px(30)),
+                    Color.FromArgb(120, 120, 128), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+
+            using (var f = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, selected ? "已选择" : "点这里进入", f,
+                    new Rectangle(r.X + Px(24), r.Bottom - Px(46), r.Width - Px(48), Px(26)),
+                    selected ? Orange : Color.FromArgb(168, 168, 176), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
         private void DrawEmpty(Graphics g)
@@ -798,6 +861,25 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (e.Button != MouseButtons.Left) return;
             if (!_expanded) { SetExpanded(true); return; }
+            if (_shown < 0)
+            {
+                Rectangle ca, cb;
+                CardRects(out ca, out cb);
+                if (ca.Contains(e.Location))
+                {
+                    _mode = 1;
+                    Toast.Show("协同模式：流水线还没接上，界面先就位");
+                    Invalidate();
+                    return;
+                }
+                if (cb.Contains(e.Location))
+                {
+                    _mode = 0;
+                    Invalidate();
+                    return;
+                }
+            }
+
             if (ExitRect().Contains(e.Location)) { HideToBackground(); return; }
             if (CollapseRect().Contains(e.Location)) { SetExpanded(false); return; }
             if (_agents.Count < 18 && PlusRect().Contains(e.Location)) { ShowAdd(); return; }
