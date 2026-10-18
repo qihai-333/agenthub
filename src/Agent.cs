@@ -61,6 +61,7 @@ namespace AgentHub
         {
             public List<string> Chosen { get; set; }
             public string Shown { get; set; }
+            public List<string> Order { get; set; }
         }
 
         public static string SessionPath
@@ -68,9 +69,10 @@ namespace AgentHub
             get { return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "session.json"); }
         }
 
-        public static void LoadSession(out List<string> chosen, out string shown)
+        public static void LoadSession(out List<string> chosen, out string shown, out List<string> order)
         {
             chosen = new List<string>();
+            order = new List<string>();
             shown = null;
             try
             {
@@ -80,19 +82,21 @@ namespace AgentHub
                 if (st != null)
                 {
                     if (st.Chosen != null) chosen = st.Chosen;
+                    if (st.Order != null) order = st.Order;
                     shown = st.Shown;
                 }
             }
             catch { }
         }
 
-        public static void SaveSession(IEnumerable<string> chosen, string shown)
+        public static void SaveSession(IEnumerable<string> chosen, string shown, IEnumerable<string> order)
         {
             try
             {
                 var st = new SessionState();
                 st.Chosen = new List<string>(chosen);
                 st.Shown = shown;
+                st.Order = order != null ? new List<string>(order) : new List<string>();
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SessionPath));
                 File.WriteAllText(SessionPath, new JavaScriptSerializer().Serialize(st), Encoding.UTF8);
             }

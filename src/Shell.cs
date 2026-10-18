@@ -63,6 +63,11 @@ namespace AgentHub
         private DateTime _restoreAt;
         private readonly Timer _restoreTimer = new Timer();
 
+        // 显示顺序（按 id）与每个图标的动画位置
+        private readonly List<string> _order = new List<string>();
+        private readonly Dictionary<string, float> _y = new Dictionary<string, float>();
+        private readonly Dictionary<string, float> _delay = new Dictionary<string, float>();
+
         private readonly Font _fIcon;
         private readonly Font _fName;
         private readonly SolidBrush _bSide;
@@ -118,7 +123,9 @@ namespace AgentHub
 
             string shownId;
             List<string> ids;
-            Config.LoadSession(out ids, out shownId);
+            List<string> savedOrder;
+            Config.LoadSession(out ids, out shownId, out savedOrder);
+            BuildOrder(savedOrder);
             foreach (string id in ids) _restore.Add(id);
             if (!string.IsNullOrEmpty(shownId))
             {
@@ -219,6 +226,32 @@ namespace AgentHub
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
             if (_pendingIdx >= 0) { _spin = (_spin + 12) % 360; active = true; }
 
+            // 图标位置动画：向目标槽位缓动，延迟用来做"依次弹出"
+            for (int k = 0; k < _order.Count; k++)
+            {
+                string id = _order[k];
+                float d;
+                if (_delay.TryGetValue(id, out d) && d > 0f)
+                {
+                    _delay[id] = d - 0.016f;
+                    active = true;
+                    continue;
+                }
+                float cur;
+                if (!_y.TryGetValue(id, out cur)) cur = ItemTopPx;
+                float target = ItemTopPx + k * ItemStepPx;
+                if (Math.Abs(cur - target) > 0.15f)
+                {
+                    _y[id] = cur + (target - cur) * 0.17f;
+                    active = true;
+                }
+                else if (cur != target)
+                {
+                    _y[id] = target;
+                    active = true;
+                }
+            }
+
             float ct = _expanded ? 1f : 0f;
             if (Math.Abs(_collapseT - ct) > 0.001f)
             {
@@ -258,9 +291,65 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             return new Rectangle(ItemXPx, ItemTopPx + i * ItemStepPx, ItemSizePx, ItemSizePx);
         }
 
+        private int AgentIndex(string id)
+        {
+            for (int i = 0; i < _agents.Count; i++) if (_agents[i].Id == id) return i;
+            return -1;
+        }
+
+        private float ItemTopFor(string id)
+        {
+            int k = _order.IndexOf(id);
+            if (k < 0) k = 0;
+            return ItemTopPx + k * ItemStepPx;
+        }
+
+        private Rectangle ItemRectNow(int i)
+        {
+            if (i < 0 || i >= _agents.Count) return new Rectangle(ItemXPx, ItemTopPx, ItemSizePx, ItemSizePx);
+            string id = _agents[i].Id;
+            float y;
+            if (!_y.TryGetValue(id, out y)) y = ItemTopFor(id);
+            return new Rectangle(ItemXPx, (int)Math.Round(y), ItemSizePx, ItemSizePx);
+        }
+
+        // 顺序：优先用上次保存的，缺的按配置顺序补在后面。
+        // 初始位置全部叠在最上面，靠延迟依次铺开 —— 就是启动时那一下"堆叠弹出"。
+        private void BuildOrder(List<string> saved)
+        {
+            _order.Clear();
+            if (saved != null)
+                foreach (string id in saved)
+                    if (AgentIndex(id) >= 0 && !_order.Contains(id)) _order.Add(id);
+            foreach (Agent a in _agents)
+                if (!_order.Contains(a.Id)) _order.Add(a.Id);
+
+            _y.Clear();
+            _delay.Clear();
+            for (int k = 0; k < _order.Count; k++)
+            {
+                _y[_order[k]] = ItemTopPx + k * 6f;   // 先压成一叠，再散开
+                _delay[_order[k]] = k * 0.085f;
+            }
+        }
+
+        private void MoveToFront(int i)
+        {
+            if (i < 0 || i >= _agents.Count) return;
+            string id = _agents[i].Id;
+            if (_order.Count == 0 || _order[0] != id)
+            {
+                _order.Remove(id);
+                _order.Insert(0, id);
+            }
+            foreach (string k in _order) _delay[k] = 0f;
+            Kick();
+            SaveSessionNow();
+        }
+
         private Rectangle ShownPillRect(int i)
         {
-            Rectangle baseR = ItemRect(i);
+            Rectangle baseR = ItemRectNow(i);
             int full = _sideW - Px(8);
             int w = Lerp(baseR.Width, Math.Max(baseR.Width, full), EaseOut(_expandT));
             return new Rectangle(Px(4), baseR.Y, w, baseR.Height);
@@ -301,7 +390,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
-                Rectangle pr = _expandT > 0f ? ShownPillRect(_shown) : ItemRect(_shown);
+                Rectangle pr = ShownPillRect(_shown);
                 using (GraphicsPath p = Round(pr, Px(12)))
                     g.FillPath(_bOrange, p);
             }
@@ -310,13 +399,16 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             bool interactive = _introT > 0.5f;
 
-            for (int i = 0; i < _agents.Count; i++)
+            for (int k = 0; k < _order.Count; k++)
             {
-                float ap = EaseOut(Clamp01((_introT - i * 0.06f) / 0.30f));
+                int i = AgentIndex(_order[k]);
+                if (i < 0) continue;
+
+                float ap = EaseOut(Clamp01((_introT - k * 0.06f) / 0.30f));
                 if (ap <= 0f) continue;
 
-                Rectangle r = ItemRect(i);
-                int dy = (int)Math.Round((1f - ap) * Px(10));
+                Rectangle r = ItemRectNow(i);
+                int dy = 0;
 
                 bool isShown = i == _shown;
                 bool isChosen = _chosen.Contains(i);
@@ -510,7 +602,14 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private Rectangle PlusRect()
         {
-            return new Rectangle(ItemXPx, ItemTopPx + _agents.Count * ItemStepPx, ItemSizePx, ItemSizePx);
+            // 跟着最后一个图标的当前位置走，避免动画中途露出空档
+            float maxY = ItemTopPx;
+            foreach (string id in _order)
+            {
+                float y;
+                if (_y.TryGetValue(id, out y) && y > maxY) maxY = y;
+            }
+            return new Rectangle(ItemXPx, (int)Math.Round(maxY) + ItemStepPx, ItemSizePx, ItemSizePx);
         }
 
         private void DrawPlus(Graphics g)
@@ -660,7 +759,11 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private int HitTest(Point p)
         {
             if (p.X < Px(4) || p.X > _sideW) return -1;
-            for (int i = 0; i < _agents.Count; i++) if (ItemRect(i).Contains(p)) return i;
+            for (int k = 0; k < _order.Count; k++)
+            {
+                int i = AgentIndex(_order[k]);
+                if (i >= 0 && ItemRectNow(i).Contains(p)) return i;
+            }
             return -1;
         }
 
@@ -698,7 +801,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             var ids = new List<string>();
             foreach (int i in _chosen) if (i >= 0 && i < _agents.Count) ids.Add(_agents[i].Id);
-            Config.SaveSession(ids, (_shown >= 0 && _shown < _agents.Count) ? _agents[_shown].Id : null);
+            Config.SaveSession(ids, (_shown >= 0 && _shown < _agents.Count) ? _agents[_shown].Id : null, _order);
         }
 
         private void RestoreTick(object sender, EventArgs e)
@@ -733,6 +836,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Agent a = AgentForm.Show(this, null);
             if (a == null) return;
             _agents.Add(a);
+
+            _order.Add(a.Id);
+
+            _y[a.Id] = ItemTopFor(a.Id);
+
+            _delay[a.Id] = 0f;
             Config.Custom.Add(a);
             Config.SaveCustom();
             Toast.Show("已添加「" + a.Name + "」");
@@ -756,6 +865,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Agent gone = _agents[i];
             Cancel(i);
             _agents.RemoveAt(i);
+
+            _order.Remove(gone.Id);
+
+            _y.Remove(gone.Id);
+
+            _delay.Remove(gone.Id);
             Config.Custom.RemoveAll(delegate(Agent x) { return x.Id == gone.Id; });
             Config.SaveCustom();
             Icons.Forget(gone.Id);
@@ -830,6 +945,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             IntPtr old = ActiveHandle;
             _shown = i;
+            MoveToFront(i);
             ApplyBounds();
             _expandT = 0f;
             Kick();
@@ -920,6 +1036,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             _pids[i] = (int)pid;
             _windows[i] = hwnd;
             _shown = i;
+            MoveToFront(i);
             ApplyBounds();
 
             if (!Host.Apply(hwnd, Handle, ContentRect(), _agents[i].OffsetFrame))
