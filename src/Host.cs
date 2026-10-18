@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -309,7 +309,9 @@ namespace AgentHub
             return best;
         }
 
-        public static void Launch(Agent a)
+        public static void Launch(Agent a) { Launch(a, false); }
+
+        public static void Launch(Agent a, bool hidden)
         {
             if (a.IsUrl)
             {
@@ -333,6 +335,7 @@ namespace AgentHub
                 if (!string.IsNullOrEmpty(a.Args)) psi.Arguments = a.Args;
             }
             psi.UseShellExecute = false;
+            if (hidden) psi.WindowStyle = ProcessWindowStyle.Hidden;   // SW_HIDE：进程创建时窗口就不可见
             try
             {
                 string dir = Path.GetDirectoryName(a.Exe);

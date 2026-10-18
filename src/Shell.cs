@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -59,6 +59,12 @@ namespace AgentHub
         private float _expandT = 1f;
         private float _spin;
 
+        // 侧栏滑出/滑入：0 = 完全可见，1 = 完全滑出（只留 3px 热区）
+        private bool _dockHidden;
+        private float _slideT;
+        private DateTime _hideDue = DateTime.MaxValue;
+        private readonly Timer _hideTimer = new Timer();
+
         private readonly List<string> _restore = new List<string>();
         private DateTime _restoreAt;
         private readonly Timer _restoreTimer = new Timer();
@@ -117,9 +123,11 @@ namespace AgentHub
             _health.Interval = 1000;
             _health.Tick += HealthTick;
             _health.Start();
-            _anim.Interval = 16;
+            _anim.Interval = 7;   // 约 144 帧，配合 timeBeginPeriod(1)
             _anim.Tick += AnimTick;
-            _anim.Start();
+            _hideTimer.Interval = 250;
+            _hideTimer.Tick += HideTick;
+            _hideTimer.Start();
 
             string shownId;
             List<string> ids;
@@ -138,6 +146,7 @@ namespace AgentHub
             {
                 _restoreTimer.Start();
                 Program.Log("restore queue: " + string.Join(",", _restore.ToArray()));
+                BuildSplash();
             }
 
             Program.Log("dock start sideW=" + _sideW + " agents=" + _agents.Count);
@@ -147,6 +156,7 @@ namespace AgentHub
         {
             base.OnLoad(e);
             ApplyBounds();
+            if (_splash != null) _splash.Show();
             Program.Log("dock bounds " + Bounds.X + "," + Bounds.Y + " " + Bounds.Width + "x" + Bounds.Height + " dpi=" + DeviceDpi);
         }
 
@@ -214,7 +224,12 @@ namespace AgentHub
                 (int)Math.Round(a.B + (b.B - a.B) * t));
         }
 
-        private void Kick() { if (!_anim.Enabled) _anim.Start(); }
+        private void Kick()
+        {
+            if (_anim.Enabled) return;
+            Native.timeBeginPeriod(1);   // 让 7ms 的节拍真的跑起来
+            _anim.Start();
+        }
 
         private void AnimTick(object sender, EventArgs e)
         {
@@ -270,8 +285,21 @@ namespace AgentHub
                 active = true;
             }
 
+            float st = _dockHidden ? 1f : 0f;
+            if (Math.Abs(_slideT - st) > 0.002f)
+            {
+                _slideT = Approach(_slideT, st, 0.30f);
+                ApplyBounds();
+                active = true;
+            }
+            else if (_slideT != st)
+            {
+                _slideT = st;
+                ApplyBounds();
+            }
+
             if (active) Invalidate();
-            else _anim.Stop();
+            else { _anim.Stop(); Native.timeEndPeriod(1); }
         }
 
         private void ApplyBounds()
@@ -279,9 +307,11 @@ namespace AgentHub
             if (!IsHandleCreated || IsDisposed) return;
 Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             // 没有显示任何应用时铺满工作区（黑底 + 开始工作），有应用时只占侧栏
-            int w = _shown >= 0 ? Math.Max(SideCollapsedPx, _sideW) : scr.Width;
-            if (Bounds.Width != w || Bounds.X != scr.X || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
-                Bounds = new Rectangle(scr.X, scr.Y, w, scr.Height);
+            int w = _shown >= 0 ? Math.Max(3, _sideW) : scr.Width;
+            int x = scr.X;
+            if (_shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - 3));
+            if (Bounds.Width != w || Bounds.X != x || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
+                Bounds = new Rectangle(x, scr.Y, w, scr.Height);
         }
 
         // ---------- 绘制 ----------
@@ -671,6 +701,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == Native.WM_MOUSEACTIVATE) { m.Result = (IntPtr)Native.MA_NOACTIVATE; return; }
+            // 点任务栏图标：当作侧栏开关，不真的最小化
+            if (m.Msg == 0x0112 && (m.WParam.ToInt32() & 0xFFF0) == 0xF020)
+            {
+                ToggleDock();
+                return;
+            }
             if (m.Msg == Native.WM_HOTKEY)
             {
                 int id = m.WParam.ToInt32();
@@ -682,6 +718,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+
+            if (_dockHidden)
+            {
+                // 窗口滑到 x=-89，露在外面的是它右边的 3px
+                if (e.X >= _sideW - 4) ShowDock();
+                return;
+            }
 
             if (!_expanded)
             {
@@ -712,6 +755,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             base.OnMouseLeave(e);
             _hover = -1; _hoverCollapse = false; _hoverExit = false; _hoverStrip = false;
             Cursor = Cursors.Default;
+            ScheduleHide(1500);   // 鼠标离开一会儿就滑出去
             Invalidate();
         }
 
@@ -765,6 +809,98 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 if (i >= 0 && ItemRectNow(i).Contains(p)) return i;
             }
             return -1;
+        }
+
+        // ---------- 滑出 / 滑入 ----------
+
+        // ---------- 开屏预加载 ----------
+
+        private Splash _splash;
+        private bool _splashDone;
+
+        private void BuildSplash()
+        {
+            var items = new List<Agent>();
+            foreach (string id in _restore)
+            {
+                int i = AgentIndex(id);
+                if (i >= 0) items.Add(_agents[i]);
+            }
+            if (items.Count == 0) return;
+
+            Bitmap logo = null;
+            try
+            {
+                using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
+                    if (ic != null) logo = ic.ToBitmap();
+            }
+            catch { }
+
+            _splash = new Splash(items, logo);
+        }
+
+        private void MarkSplash(string id, string text, int kind)
+        {
+            if (_splash == null || _splash.IsDisposed) return;
+            try { _splash.Set(id, text, kind); } catch { }
+            if (kind == 2 && !_splashDone) CloseSplash();   // 第一个就绪就进入
+        }
+
+        private void CloseSplash()
+        {
+            _splashDone = true;
+            if (_splash == null) return;
+            try { _splash.Close(); } catch { }
+            _splash = null;
+            ShowDock();
+        }
+
+        private void HideTick(object sender, EventArgs e)
+        {
+            if (_hideDue == DateTime.MaxValue) return;
+            if (DateTime.Now < _hideDue) return;
+            _hideDue = DateTime.MaxValue;
+            HideDock();
+        }
+
+        private void ShowDock()
+        {
+            _hideDue = DateTime.MaxValue;
+            if (!_dockHidden) return;
+            _dockHidden = false;
+            ReplayDeck();
+            Kick();
+            Invalidate();
+        }
+
+        private void HideDock()
+        {
+            _hideDue = DateTime.MaxValue;
+            if (_dockHidden) return;
+            if (_shown < 0) return;   // 没打开应用时，侧栏就是画面本身
+            _dockHidden = true;
+            Kick();
+        }
+
+        private void ToggleDock()
+        {
+            if (_dockHidden) ShowDock(); else HideDock();
+        }
+
+        // 每次唤出都重放一次"堆叠散开"
+        private void ReplayDeck()
+        {
+            for (int k = 0; k < _order.Count; k++)
+            {
+                _y[_order[k]] = ItemTopPx + k * 6f;
+                _delay[_order[k]] = k * 0.038f;
+            }
+        }
+
+        private void ScheduleHide(int ms)
+        {
+            if (_shown < 0) return;
+            _hideDue = DateTime.Now.AddMilliseconds(ms);
         }
 
         public void SetExpanded(bool value)
@@ -826,7 +962,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             if (_chosen.Count >= MaxSlots) return;
 
             _chosen.Add(idx);
-            StartAgent(idx);
+            StartAgent(idx, true);
             Invalidate();
         }
 
@@ -947,6 +1083,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             _shown = i;
             MoveToFront(i);
             ApplyBounds();
+            ScheduleHide(350);
             _expandT = 0f;
             Kick();
 
@@ -972,7 +1109,9 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             return -1;
         }
 
-        private void StartAgent(int i)
+        private void StartAgent(int i) { StartAgent(i, false); }
+
+        private void StartAgent(int i, bool hidden)
         {
             Agent a = _agents[i];
             Program.Log("start " + a.Id);
@@ -984,7 +1123,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             IntPtr h = Host.Find(a, DateTime.MinValue);
             if (h != IntPtr.Zero) { FinishStart(i, h); return; }
 
-            try { Host.Launch(a); }
+            MarkSplash(a.Id, "启动中", 1);
+            try { Host.Launch(a, hidden); }
             catch (Exception ex)
             {
                 Program.Log("launch failed: " + ex.Message);
@@ -1010,6 +1150,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 int i = _pendingIdx;
                 _pendingIdx = -1;
                 _chosen.Remove(i);
+                MarkSplash(_agents[i].Id, "超时", 3);
+
                 Toast.Show("「" + _agents[i].Name + "」启动超时");
                 Program.Log("TIMEOUT " + _agents[i].Id);
                 Invalidate();
@@ -1027,6 +1169,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             if (!Host.SelfElevated() && Host.LooksElevated((int)pid))
             {
                 _chosen.Remove(i);
+
+                MarkSplash(_agents[i].Id, "失败", 3);
                 Toast.Show("「" + _agents[i].Name + "」以管理员权限运行，无法接管");
                 Invalidate();
                 return;
@@ -1036,8 +1180,10 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             _pids[i] = (int)pid;
             _windows[i] = hwnd;
             _shown = i;
+            MarkSplash(_agents[i].Id, "就绪", 2);
             MoveToFront(i);
             ApplyBounds();
+            ScheduleHide(350);
 
             if (!Host.Apply(hwnd, Handle, ContentRect(), _agents[i].OffsetFrame))
             {

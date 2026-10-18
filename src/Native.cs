@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -122,6 +122,9 @@ namespace AgentHub
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr h);
+
+        [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
+        [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint ms);
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
