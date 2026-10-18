@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -391,7 +391,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             if (_introT <= 0.15f) return;
 
             string text = "开始工作";
-            int em = Px(76);
+            int em = Px(228);
 
             GraphicsPath path = null;
             FontFamily fam = null;
@@ -432,13 +432,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 }
 
                 // 2) 挤出：往下复制几层暗橙，做出字的厚度
-                for (int i = 4; i >= 1; i--)
+                for (int i = 5; i >= 1; i--)
                 {
                     using (var ex = (GraphicsPath)path.Clone())
                     {
                         using (var m = new Matrix())
                         {
-                            m.Translate(0, i * 1.9f);
+                            m.Translate(0, i * (em * 0.024f));
                             ex.Transform(m);
                         }
                         using (var br = new SolidBrush(Color.FromArgb(255, 104, 40, 2)))
@@ -477,7 +477,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 g.Clip = old;
 
                 // 5) 一条细亮边强化轮廓
-                using (var pen = new Pen(Color.FromArgb(95, 255, 202, 146), Math.Max(1f, Px(1) * 0.9f)))
+                using (var pen = new Pen(Color.FromArgb(95, 255, 202, 146), Math.Max(1.5f, em * 0.011f)))
                     g.DrawPath(pen, path);
             }
             catch { }

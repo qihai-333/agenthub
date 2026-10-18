@@ -1,4 +1,4 @@
-# AGENT HUB
+﻿# AGENT HUB
 
 一个 Windows 上的「AI 应用工作台」：左侧一条窄侧栏，点谁就把谁的真实窗口铺到右侧，切换只是显示/隐藏，不重启、不丢状态。
 
@@ -119,8 +119,9 @@ drop dsh window-gone    ← 应用自己关掉了，已释放名额
 agenthub/
 ├─ src/*.cs            源码（WinForms，无第三方依赖）
 ├─ build.ps1           编译脚本
-├─ icon.ico            应用图标
-├─ tools/MakeIcon.cs   图标生成器
+├─ icon.ico            应用图标（多尺寸）
+├─ brand/logo.jpg      品牌源图
+├─ tools/MakeIconFromImage.cs  从源图生成 icon.ico
 ├─ agents.example.json 配置模板
 ├─ GLOSSARY.md         领域术语表
 └─ docs/adr/           架构决策记录
