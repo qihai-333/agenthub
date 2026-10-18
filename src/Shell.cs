@@ -246,6 +246,7 @@ namespace AgentHub
             if (_pressT > 0f) { _pressT = Approach(_pressT, 0f, 0.30f); active = true; }
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
             if (_pendingIdx >= 0) { _spin = (_spin + 12) % 360; active = true; }
+            if (_tiled) { TileTick(); active = true; }
 
             // 图标位置动画：向目标槽位缓动，延迟用来做"依次弹出"
             for (int k = 0; k < _order.Count; k++)
@@ -541,6 +542,9 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         }
 
         private Pipeline _pipe;
+        private bool _picking;
+        private bool _tiled;
+        private readonly List<int> _roles = new List<int>();
         private string _lastCopied = "";
         private string _lastAdvance = "";
         private DateTime _pipeAt = DateTime.Now;
@@ -554,10 +558,67 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private Rectangle PipeEntryRect() { return new Rectangle(ItemXPx, Height - Px(196), ItemSizePx, ItemSizePx); }
 
+        private Rectangle[] TileRects()
+        {
+            // 三栏等宽，中间留 28px 给箭头
+            int gap = Px(28);
+            int left = _sideW + Px(18);
+            int totalW = Width - left - Px(18);
+            int w = (totalW - gap * 2) / 3;
+            int top = Px(96);
+            int h = Height - top - Px(150);
+            var r = new Rectangle[3];
+            for (int k = 0; k < 3; k++) r[k] = new Rectangle(left + k * (w + gap), top, w, h);
+            return r;
+        }
+
+        private void TileTick()
+        {
+            if (!_tiled) return;
+            Rectangle[] rr = TileRects();
+            for (int k = 0; k < _roles.Count && k < 3; k++)
+            {
+                int idx = _roles[k];
+                IntPtr h;
+                if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h)) continue;
+                Host.Apply(h, Handle, rr[k], _agents[idx].OffsetFrame);
+            }
+        }
+
+        // 只保留选中的三个：其余在 AgentHub 里开着的全部清掉
+        private void StartSynergy()
+        {
+            var cur = new List<int>(_chosen);
+            foreach (int idx in cur) if (!_roles.Contains(idx)) Cancel(idx);
+            for (int k = 0; k < _roles.Count; k++)
+            {
+                int idx = _roles[k];
+                if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
+            }
+            _shown = -1;
+            _tiled = true;
+            ApplyBounds();
+            Invalidate();
+        }
+
+        private void ExitSynergy()
+        {
+            var cur2 = new List<int>(_chosen);
+            foreach (int idx in cur2) Cancel(idx);
+            _roles.Clear();
+            _tiled = false;
+            _picking = false;
+            _mode = -1;
+            _shown = -1;
+            ApplyBounds();
+            Invalidate();
+        }
+
         private void ShowPipelineView()
         {
             _mode = 1;
             _pipe = new Pipeline(PipeConfig.Load());   // 每次都重读，改完 json 立刻生效
+            if (_roles.Count < 3) { _picking = true; _roles.Clear(); }
             IntPtr h;
             if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h)) Host.Hide(h);
             _shown = -1;
@@ -646,6 +707,25 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void DrawPipeline(Graphics g)
         {
+            if (_picking)
+            {
+                using (var f0 = new Font("微软雅黑", Px(34), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var b0 = new SolidBrush(TextBlack))
+                    g.DrawString("点侧栏选三个应用作为角色", f0, b0, _sideW + Px(80), Height * 0.20f);
+                using (var f1 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b1 = new SolidBrush(Color.FromArgb(120, 120, 128)))
+                    g.DrawString("已选 " + _roles.Count + " / 3　·　顺序就是接力顺序", f1, b1, _sideW + Px(80), Height * 0.20f + Px(52));
+                int yy = (int)(Height * 0.34f);
+                for (int k = 0; k < _roles.Count; k++)
+                {
+                    using (var f2 = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
+                    using (var b2 = new SolidBrush(Orange))
+                        g.DrawString((k + 1) + "  " + _agents[_roles[k]].Name, f2, b2, _sideW + Px(80), yy);
+                    yy += Px(40);
+                }
+                return;
+            }
+
             if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());
 
             int cw = Width - _sideW;
@@ -1072,7 +1152,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             if (PipeEntryRect().Contains(e.Location))
             {
-                if (_mode == 1) { _mode = -1; Invalidate(); }   // 已在协同：退回模式选择页
+                if (_mode == 1) { ExitSynergy(); }   // 已在协同：关掉三个角色，退回模式选择页
                 else ShowPipelineView();
                 return;
             }
@@ -1421,6 +1501,16 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private void LeftClick(int i)
         {
             if (i < 0 || i >= _agents.Count) return;
+
+            if (_picking)
+            {
+                if (_roles.Contains(i)) _roles.Remove(i);
+                else if (_roles.Count < 3) _roles.Add(i);
+                else { Toast.Show("最多三个角色，先点掉一个"); return; }
+                if (_roles.Count == 3) { _picking = false; StartSynergy(); Toast.Show("协同已启动，三个窗口已平铺"); }
+                Invalidate();
+                return;
+            }
             if (_pendingIdx >= 0) return;
 
             if (i == _shown) { ForceShown(); return; }
