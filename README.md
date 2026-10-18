@@ -1,4 +1,4 @@
-﻿# AGENT HUB
+# AGENT HUB
 
 一个 Windows 上的「AI 应用工作台」：左侧一条窄侧栏，点谁就把谁的真实窗口铺到右侧，切换只是显示/隐藏，不重启、不丢状态。
 
@@ -45,25 +45,41 @@ AGENT HUB 把它们收进一条侧栏：
 
 添加后写入 `custom.json`，不污染 `agents.json`。
 
-## 构建
+## 下载后怎么用
 
-需要 .NET Framework 4.x 自带的 `csc.exe`，不需要装 SDK 或运行时：
+从 [Releases](https://github.com/mihayoufamily/agenthub/releases) 下载 `AgentHub-1.0.0-win64.zip`，解压后双击 `AgentHub.exe`。
 
-```powershell
-.\build.ps1
+- 不需要装 .NET SDK，不需要任何运行时，单文件 450KB
+- **首次运行是黑底 + 空侧栏**，点侧栏底部的「+」添加你的应用：可以从当前打开的窗口里挑，也可以手填 exe 路径
+- 添加的应用写进同目录的 `custom.json`，下次启动自动恢复上次打开的三个
+
+> 仓库里的 `bin/` 是构建产物、不进 git，所以**直接下源码 zip 是找不到 exe 的**——要么下 Release，要么自己编。
+
+## 从源码构建
+
+双击 `build.bat` 就行，它会调用 Windows 自带的 .NET Framework 4 编译器（Win10/11 都有）：
+
+```bat
+build.bat
 ```
 
-产物 `bin\AgentHub.exe`，单文件约 450KB，无外部依赖。
+产物 `bin\AgentHub.exe`。
+
+也可以用 PowerShell 版 `build.ps1`，但如果提示"禁止运行脚本"，先执行一次：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+```
 
 ## 运行
 
-把 `bin\AgentHub.exe` 和 `agents.json` 放到一个目录（**不要放在被沙箱管辖的工作区里**，否则进程会拿到低完整性令牌，表现为点应用一直"正在启动"）。
+把 `AgentHub.exe` 单独放到一个目录就行（**不要放在被沙箱管辖的工作区里**，否则进程会拿到低完整性令牌，表现为点应用一直"正在启动"）。
 
 ```powershell
 .\bin\AgentHub.exe
 ```
 
-首次运行会读 `agents.json`；没有这个文件时会用内置的空白默认值。
+没有 `agents.json` 时从空白开始，用「+」添加应用。
 
 ## 配置
 

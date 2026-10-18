@@ -170,17 +170,9 @@ namespace AgentHub
 
         public static List<Agent> Defaults()
         {
-            var l = new List<Agent>();
-            l.Add(Make("dsh", "DSH 桌面", "DS", "exe", @"D:\dsh-zhuomian\DeepSeek Harness.exe", "DeepSeek Harness"));
-            l.Add(Make("dshweb", "DSH 网页", "DW", "url", "", "msedge"));
-            l.Add(Make("doubao", "豆包", "豆", "exe", @"D:\Doubao\Doubao.exe", "Doubao"));
-            l.Add(Make("trae", "Trae", "TR", "exe", @"D:\Trae CN\Trae CN.exe", "Trae CN"));
-            l.Add(Make("qoder", "Qoder", "QD", "exe", @"C:\Users\zhangdy\AppData\Local\Qoder CN\Qoder CN Launcher\Qoder CN Launcher.exe", "Qoder CN,Qoder CN Launcher"));
-            l.Add(Make("workbuddy", "WorkBuddy", "WB", "exe", @"D:\workbuddy\WorkBuddy.exe", "WorkBuddy"));
-            l.Add(Make("codex", "Codex", "CX", "exe", @"C:\Users\zhangdy\Desktop\ChatGPT - 快捷方式.lnk", "ChatGPT"));
-            l.Add(Make("tabbit", "Tabbit", "TB", "exe", @"D:\Tabbit Browser\Application\Tabbit Browser.exe", "Tabbit Browser"));
-            l.Add(Make("ccswitch", "CC Switch", "CC", "exe", @"C:\Users\zhangdy\AppData\Local\Programs\cc-switch.exe", "cc-switch"));
-            return l;
+            // 别人的机器上这些路径不存在，硬编码一堆失效条目只会更迷惑。
+            // 没有配置时从空白开始，用侧栏的「+」自己添加。
+            return new List<Agent>();
         }
 
         private static Agent Make(string id, string name, string sh, string kind, string exe, string proc)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
@@ -7,8 +7,8 @@ class FontPreview
 {
     static void Main()
     {
-        string[] names = { "微软雅黑", "等线", "华文细黑" };
-        int w = 1000, rowH = 200;
+        string[] names = { "等线" };
+        int w = 1500, rowH = 620;
         using (var bmp = new Bitmap(w, rowH * names.Length))
         using (var g = Graphics.FromImage(bmp))
         {
@@ -23,7 +23,7 @@ class FontPreview
                 using (var sb = new SolidBrush(Color.FromArgb(120, 120, 130)))
                     g.DrawString(names[r], f, sb, 16, rowH * r + 10);
 
-                DrawTitle(g, "开始工作", names[r], 76, cx, cy);
+                DrawTitle(g, "开始工作", names[r], 228, cx, cy);
             }
 
             bmp.Save(@"D:\dsh\agenthub\shots\fonts.png");

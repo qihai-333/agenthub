@@ -19,3 +19,6 @@ shots/
 *.user
 *.suo
 .vs/
+
+# 打包产物
+dist/
