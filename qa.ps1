@@ -25,6 +25,11 @@ public static class T {
         }, IntPtr.Zero);
         return f;
     }
+    public static System.Collections.Generic.List<IntPtr> AllWins(int pid) {
+        var l2 = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows(delegate(IntPtr h, IntPtr l) { uint p; GetWindowThreadProcessId(h, out p); if ((int)p != pid) return true; RECT r; GetWindowRect(h, out r); if (r.R - r.L <= 1) return true; l2.Add(h); return true; }, IntPtr.Zero);
+        return l2;
+    }
     public static IntPtr FindTitle(string part) {
         IntPtr f = IntPtr.Zero;
         EnumWindows(delegate(IntPtr h, IntPtr l) {
@@ -100,8 +105,8 @@ $w2 = if ($n2) { [T]::FindPid($n2.Id, 500) } else { [IntPtr]::Zero }
 Check '第二个应用能接管' ($n2 -ne $null) ("charmap 进程=" + $(if ($n2) { '有' } else { '无' }))
 Check '切走的应用被隐藏' ($n1 -and -not [T]::Vis($w1)) ("notepad vis=" + [T]::Vis($w1))
 
-# 4 点回第一个：恢复显示
-[T]::LClick($dock, 46, 56)
+# 4 点回第一个（注意：MRU 会把它挪到第一位，第二项的坐标才是它）
+[T]::LClick($dock, 46, 120)
 Start-Sleep -Seconds 2
 Check '切回已选应用直接显示' ([T]::Vis($w1) -and [T]::D($w1) -eq '2468x1528@92') ([T]::D($w1) + " vis=" + [T]::Vis($w1))
 
@@ -133,14 +138,15 @@ Start-Sleep -Milliseconds 800
 $menu = [IntPtr]::Zero
 $p2 = Get-Process -Name AgentHub | Where-Object { $_.Path -like '*ah-qa*' } | Select-Object -First 1
 # 菜单是同一进程的另一个顶层窗口，按尺寸找
-$menu = [T]::FindPid($p2.Id, 0)
+$menu = [IntPtr]::Zero
+foreach ($h in [T]::AllWins($p2.Id)) { if ($h -ne $dock) { $menu = $h; break } }
 foreach ($h in @($menu)) { }
 $found = $false
 $cands = @()
 $lp = [IntPtr]::Zero
 Add-Type -AssemblyName System.Windows.Forms
 # 用枚举找小窗口
-$probe = [T]::FindTitle('取消')
+$probe = $menu
 if ($probe -ne [IntPtr]::Zero) { $found = $true; $menu = $probe }
 Check '右键菜单（需人工确认）' $true ("hwnd=" + $menu)
 
