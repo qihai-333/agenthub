@@ -344,7 +344,7 @@ namespace AgentHub
             var suppT = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
             suppT.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             suppT.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _txtSupplement = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical };
+            _txtSupplement = new TextBox { ImeMode = ImeMode.On,  Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical };
             _btnAddSupp = new Button { Text = "添加补充", AutoSize = true };
             _btnAddSupp.Click += delegate { AddSupplement(); };
             var suppBtnRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };

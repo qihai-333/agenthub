@@ -665,6 +665,19 @@ namespace AgentHub
         private readonly AgentDialog[] _dialogs = new AgentDialog[3];
         // 任务需求输入框（协同未开始时显示在主区）
         private TextBox _taskBox;
+
+        // 鼠标落点是否在可输入控件上（输入法需要活动窗口）
+        private bool OnInputAtCursor()
+        {
+            Point cp = PointToClient(Cursor.Position);
+            Control c = GetChildAtPoint(cp, GetChildAtPointSkip.Invisible);
+            while (c != null)
+            {
+                if (c is TextBoxBase) return true;
+                c = c.Parent;
+            }
+            return _taskBox != null && _taskBox.Visible && _taskBox.Bounds.Contains(cp);
+        }
         // 轮次历史列表的悬停项
         private int _hoverRound = -1;
 
@@ -1629,6 +1642,7 @@ namespace AgentHub
             {
                 _taskBox = new TextBox();
                 _taskBox.Multiline = true;
+            _taskBox.ImeMode = ImeMode.On;
                 _taskBox.ScrollBars = ScrollBars.Vertical;
                 _taskBox.BorderStyle = BorderStyle.FixedSingle;
                 _taskBox.BackColor = Color.White;
@@ -2192,7 +2206,12 @@ namespace AgentHub
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == Native.WM_CLIPBOARDUPDATE) { ClipboardChanged(); return; }
-            if (m.Msg == Native.WM_MOUSEACTIVATE) { m.Result = (IntPtr)Native.MA_NOACTIVATE; return; }
+            if (m.Msg == Native.WM_MOUSEACTIVATE)
+            {
+                // 点在可输入控件上时必须允许窗口激活，否则输入法无法附着、无法候选上屏
+                m.Result = (IntPtr)(OnInputAtCursor() ? 1 : Native.MA_NOACTIVATE);
+                return;
+            }
             // 点任务栏图标：当作侧栏开关，不真的最小化
             if (m.Msg == 0x0112 && (m.WParam.ToInt32() & 0xFFF0) == 0xF020)
             {
