@@ -1077,7 +1077,8 @@ namespace AgentHub
             {
                 // 面板自管：自建 Pipeline、自读 agents.json、OnHandleCreated 里自挂剪贴板监听
                 _synPanel = new SynergyPanel(PipeConfig.Load());
-                Native.SetNoActivate(Handle, false);   // 协同模式有输入框：整个会话保持可激活，否则输入法附着不上
+                Native.SetNoActivate(Handle, false);   // 协同模式有输入框：整个会话保持可激活
+                Native.SetForegroundWindow(Handle);    // 必须真的成为前台，输入法才会附着
                 Controls.Add(_synPanel);
                 _synPanel.BringToFront();
             }
@@ -2236,7 +2237,7 @@ namespace AgentHub
             {
                 // 点在可输入控件上时必须允许窗口激活，否则输入法无法附着、无法候选上屏
                 bool onInput = OnInputAtCursor();
-                Program.Log("mouseactivate onInput=" + onInput + " ctl=" + (GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible) != null ? GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible).GetType().Name : "null"));
+                Program.Log("activating fg=" + Native.Title(Native.GetForegroundWindow()) + " isSelf=" + (Native.GetForegroundWindow() == Handle) + " onInput=" + onInput + " ctl=" + (GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible) != null ? GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible).GetType().Name : "null"));
                 if (onInput) Native.SetNoActivate(Handle, false);   // 必须摘掉 NOACTIVATE，否则输入法附着不上
                 m.Result = (IntPtr)(onInput ? 1 : Native.MA_NOACTIVATE);
                 return;

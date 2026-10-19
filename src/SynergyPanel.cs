@@ -255,6 +255,7 @@ namespace AgentHub
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280f));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(root);
+            ExternalFields.Attach(this);   // 多行文本框改为点击弹出编辑窗口：本窗口 NOACTIVATE，就地输入法不可用
 
             // ---- 左：三个工作区，整体滚动（窗口变小时不压扁输入框）----
             var scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
@@ -991,6 +992,7 @@ namespace AgentHub
                 root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // 输入/输出
                 root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 按钮行
                 Controls.Add(root);
+            ExternalFields.Attach(this);   // 多行文本框改为点击弹出编辑窗口：本窗口 NOACTIVATE，就地输入法不可用
 
                 // ---- 标题行 ----
                 var head = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
