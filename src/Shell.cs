@@ -2455,6 +2455,7 @@ namespace AgentHub
 
             Rekey(_windows, removed);
             Rekey(_pids, removed);
+            _launchedByMe.Clear();   // 索引会平移，宁可不杀（安全方向）也不要误杀
 
             // _dead：健康检查的连续未命中计数，键同样是 agent 索引
             var dead = new Dictionary<int, int>();
@@ -2704,6 +2705,7 @@ namespace AgentHub
             {
                 _chosen.Remove(i);
                 _pids.Remove(i);
+            _launchedByMe.Remove(i);   // 进程没了，归属标记必须一起清，否则下次你手动开同一个应用会被误判为我方
                 _windows.Remove(i);
                 _shown = old == IntPtr.Zero ? -1 : IndexOfWindow(old);
                 ApplyBounds();
@@ -2737,6 +2739,7 @@ namespace AgentHub
             _chosen.Remove(i);
             _windows.Remove(i);
             _pids.Remove(i);
+            _launchedByMe.Remove(i);   // 进程没了，归属标记必须一起清，否则下次你手动开同一个应用会被误判为我方
             if (_pendingIdx == i) { _pendingIdx = -1; _poll.Stop(); }
 
             Program.Log("cancel " + _agents[i].Id);
@@ -2781,6 +2784,7 @@ namespace AgentHub
                 _chosen.Remove(i);
                 _windows.Remove(i);
                 _pids.Remove(i);
+            _launchedByMe.Remove(i);   // 进程没了，归属标记必须一起清，否则下次你手动开同一个应用会被误判为我方
                 _dead.Remove(i);
                 if (_shown == i) _shown = -1;
                 ApplyBounds();
