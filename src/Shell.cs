@@ -52,6 +52,8 @@ namespace AgentHub
         private readonly Timer _anim = new Timer();
 
         private float _introT;
+        private float _enterT;                 // 开屏入场进度：图标 -> 标题 -> 卡片
+        private Bitmap _logo;
         private float _hoverT = 1f;
         private float _pressT;
         private int _pressIdx = -1;
@@ -137,6 +139,7 @@ namespace AgentHub
             _hideTimer.Tick += HideTick;
             _hideTimer.Start();
             SetupTray();
+            try { using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) if (ic != null) { using (var src0 = ic.ToBitmap()) { _logo = new Bitmap(96, 96); using (var lg = Graphics.FromImage(_logo)) { lg.InterpolationMode = InterpolationMode.HighQualityBicubic; lg.DrawImage(src0, 0, 0, 96, 96); } } } } catch { }
 
             string shownId;
             List<string> ids;
@@ -145,6 +148,7 @@ namespace AgentHub
             BuildOrder(savedOrder);
             // 启动时不再拉起任何应用：只恢复侧栏顺序，进程由用户在选定模式后按需启动。
             // 原来的 _restore 队列会在这里直接 Launch 三个应用，既违反"预加载不得提前启动"，也会在开屏期间弹窗。
+            _enterT = 0f;
             _mode = -1;
             _shown = -1;
             Program.Log("startup: 不自动启动应用，chosen=" + ids.Count);
@@ -255,6 +259,7 @@ namespace AgentHub
             bool active = false;
 
             if (_introT < 1f) { _introT = Approach(_introT, 1f, 0.06f); active = true; }
+            if (_mode < 0 && _shown < 0 && _enterT < 1f) { _enterT = Approach(_enterT, 1f, 0.010f); active = true; }
             if (_hoverT < 1f) { _hoverT = Approach(_hoverT, 1f, 0.22f); active = true; }
             if (_pressT > 0f) { _pressT = Approach(_pressT, 0f, 0.30f); active = true; }
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
@@ -1002,6 +1007,7 @@ namespace AgentHub
             UnregisterThumbs();
             for (int k = 0; k < 3; k++) _tileDone[k] = false;
             _picking = false;
+            _enterT = 0f;
             _mode = -1;
             _shown = -1;
             ApplyBounds();
@@ -1715,18 +1721,38 @@ namespace AgentHub
                 return;
             }
 
+            // 入场顺序：图标 -> 标题 -> 卡片，总时长约 1.8 秒；点一下可跳过
+            float pIcon = Clamp01(_enterT / 0.32f);
+            float pTitle = Clamp01((_enterT - 0.26f) / 0.34f);
+            float pCards = Clamp01((_enterT - 0.55f) / 0.45f);
+
+            if (pIcon > 0.01f && _logo != null)
+            {
+                int sz = Px(104);
+                int lx = _sideW + (Width - _sideW - sz) / 2;
+                int ly = (int)(Height * 0.105f + (1f - pIcon) * Px(18));
+                var ia = new System.Drawing.Imaging.ImageAttributes();
+                var cm = new System.Drawing.Imaging.ColorMatrix();
+                cm.Matrix33 = pIcon;
+                ia.SetColorMatrix(cm);
+                g.DrawImage(_logo, new Rectangle(lx, ly, sz, sz), 0, 0, _logo.Width, _logo.Height,
+                    GraphicsUnit.Pixel, ia);
+                ia.Dispose();
+            }
+
+            if (pTitle > 0.01f)
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
-                var r = new RectangleF(_sideW, Height * 0.25f, Width - _sideW, Px(90));
-                // 阴影
+                var r = new RectangleF(_sideW, Height * 0.25f + (1f - pTitle) * Px(14), Width - _sideW, Px(90));
                 for (int i = 9; i >= 1; i--)
-                using (var br = new SolidBrush(Color.FromArgb(20, 0, 0, 0)))
+                using (var br = new SolidBrush(Color.FromArgb((int)(20 * pTitle), 0, 0, 0)))
                     g.DrawString("选择你的工作模式", f, br,
                         new RectangleF(r.X, r.Y + i * 1.2f, r.Width, r.Height), sf);
-                using (var tb = new SolidBrush(Color.FromArgb(24, 24, 28)))
+                using (var tb = new SolidBrush(Color.FromArgb((int)(255 * pTitle), 24, 24, 28)))
                     g.DrawString("选择你的工作模式", f, tb, r, sf);
             }
+            if (pCards <= 0.02f) return;
 
             Rectangle ca, cb;
             CardRects(out ca, out cb);
