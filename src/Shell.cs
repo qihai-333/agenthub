@@ -516,6 +516,18 @@ namespace AgentHub
             return p;
         }
 
+        // 诊断：记录谁把前台抢走了
+        protected override void OnDeactivate(EventArgs e)
+        {
+            base.OnDeactivate(e);
+            try
+            {
+                IntPtr fg = Native.GetForegroundWindow();
+                Program.Log("deactivate fg=" + Native.Title(fg) + " textFocus=" + AnyTextFocused(this));
+            }
+            catch { }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
@@ -1065,6 +1077,7 @@ namespace AgentHub
             {
                 // 面板自管：自建 Pipeline、自读 agents.json、OnHandleCreated 里自挂剪贴板监听
                 _synPanel = new SynergyPanel(PipeConfig.Load());
+                Native.SetNoActivate(Handle, false);   // 协同模式有输入框：整个会话保持可激活，否则输入法附着不上
                 Controls.Add(_synPanel);
                 _synPanel.BringToFront();
             }
@@ -3031,7 +3044,7 @@ namespace AgentHub
         private void HealthTick(object sender, EventArgs e)
         {
             // 输入框不在焦点上时恢复 NOACTIVATE，避免之后点任何地方都抢焦点
-            if (!AnyTextFocused(this)) Native.SetNoActivate(Handle, true);
+            if (!AnyTextFocused(this) && _synPanel == null) Native.SetNoActivate(Handle, true);   // 协同面板在时保持可激活
             if (_chosen.Count == 0) return;
             foreach (int i in new List<int>(_chosen))
             {
