@@ -143,20 +143,11 @@ namespace AgentHub
             List<string> savedOrder;
             Config.LoadSession(out ids, out shownId, out savedOrder);
             BuildOrder(savedOrder);
-            foreach (string id in ids) _restore.Add(id);
-            if (!string.IsNullOrEmpty(shownId))
-            {
-                _restore.Remove(shownId);
-                _restore.Insert(0, shownId);
-            }
-            _restoreTimer.Interval = 500;
-            _restoreTimer.Tick += RestoreTick;
-            if (_restore.Count > 0)
-            {
-                _restoreTimer.Start();
-                Program.Log("restore queue: " + string.Join(",", _restore.ToArray()));
-                BuildSplash();
-            }
+            // 启动时不再拉起任何应用：只恢复侧栏顺序，进程由用户在选定模式后按需启动。
+            // 原来的 _restore 队列会在这里直接 Launch 三个应用，既违反"预加载不得提前启动"，也会在开屏期间弹窗。
+            _mode = -1;
+            _shown = -1;
+            Program.Log("startup: 不自动启动应用，chosen=" + ids.Count);
 
             Program.Log("dock start sideW=" + _sideW + " agents=" + _agents.Count);
         }
@@ -165,8 +156,28 @@ namespace AgentHub
         {
             base.OnLoad(e);
             ApplyBounds();
-            if (_splash != null) _splash.Show();
+            StartPreload();   // 配置级预加载：只读，不启动任何进程
             Program.Log("dock bounds " + Bounds.X + "," + Bounds.Y + " " + Bounds.Width + "x" + Bounds.Height + " dpi=" + DeviceDpi);
+        }
+
+        // 预加载只做"读配置、探测已有窗口"这类不启动进程的准备，全部在后台线程；
+        // 它不影响开屏动画和模式选择——加载没完也照样可以点。
+        private bool _preloaded;
+        private void StartPreload()
+        {
+            var th = new System.Threading.Thread(delegate()
+            {
+                try
+                {
+                    PipeConfig.Load();        // 解析流程配置，首次会生成 pipeline.json
+                    Host.Windows();           // 探测当前已经存在的窗口（只读，不启动）
+                    Config.LoadCustom();      // 自定义应用列表
+                }
+                catch { }
+                finally { _preloaded = true; Program.Log("preload done"); }
+            });
+            th.IsBackground = true;
+            th.Start();
         }
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
