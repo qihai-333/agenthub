@@ -404,6 +404,21 @@ namespace AgentHub
             if (!Owned.ContainsKey(pid)) Owned[pid] = mine;
         }
 
+        // 按进程名列出当前已存在的 pid：用来分辨“点按钮之前就开着的实例”
+        public static HashSet<int> PidsByName(string proc)
+        {
+            var set = new HashSet<int>();
+            if (string.IsNullOrEmpty(proc)) return set;
+            foreach (string one in proc.Split(new char[] { ',', ';' }))
+            {
+                string n = one.Trim();
+                if (n.Length == 0) continue;
+                try { foreach (Process p in Process.GetProcessesByName(n)) set.Add(p.Id); }
+                catch { }
+            }
+            return set;
+        }
+
         public static bool IsOwned(int pid)
         {
             bool mine;
