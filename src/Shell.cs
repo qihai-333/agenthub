@@ -185,11 +185,11 @@ namespace AgentHub
         }
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
-        private int SideExpandedPx { get { return Px(116); } }
-        private int ItemSizePx { get { return Px(96); } }
-        private int ItemStepPx { get { return Px(112); } }
-        private int ItemTopPx { get { return Px(56); } }
-        private int ItemXPx { get { return Px(10); } }
+        private int SideExpandedPx { get { return Px(92); } }
+        private int ItemSizePx { get { return Px(52); } }
+        private int ItemStepPx { get { return Px(64); } }
+        private int ItemTopPx { get { return Px(30); } }
+        private int ItemXPx { get { return Px(20); } }
 
         public IntPtr ActiveHandle
         {
@@ -531,7 +531,7 @@ namespace AgentHub
             int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
             int h = Px(300);
             int x0 = left0 + (cw - (w * 2 + gap)) / 2;
-            int y = (int)(Height * 0.42f);
+            int y = (int)(Height * 0.46f);
             a = new Rectangle(x0, y, w, h);
             b = new Rectangle(x0 + w + gap, y, w, h);
         }
@@ -1737,9 +1737,9 @@ namespace AgentHub
 
             if (pIcon > 0.01f && _logo != null)
             {
-                int sz = Px(104);
+                int sz = Px(160);
                 int lx = left + (Width - left - sz) / 2;
-                int ly = (int)(Height * 0.105f + (1f - pIcon) * Px(18));
+                int ly = (int)(Height * 0.145f + (1f - pIcon) * Px(22));
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
                 cm.Matrix33 = pIcon;
@@ -1753,7 +1753,7 @@ namespace AgentHub
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
-                var r = new RectangleF(left, Height * 0.25f + (1f - pTitle) * Px(14), Width - left, Px(90));
+                var r = new RectangleF(left, Height * 0.30f + (1f - pTitle) * Px(14), Width - left, Px(90));
                 for (int i = 9; i >= 1; i--)
                 using (var br = new SolidBrush(Color.FromArgb((int)(20 * pTitle), 0, 0, 0)))
                     g.DrawString("选择你的工作模式", f, br,
@@ -1795,7 +1795,7 @@ namespace AgentHub
 
         private void DrawTile(Graphics g, Agent a, Rectangle r)
         {
-            int sz = Px(80);
+            int sz = Px(36);
             Rectangle ir = new Rectangle(r.X + (r.Width - sz) / 2, r.Y + (r.Height - sz) / 2, sz, sz);
             Bitmap bmp = Icons.Get(a);
             if (bmp == null) bmp = Icons.Letter(a.Name, 48);
