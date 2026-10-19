@@ -186,7 +186,8 @@ namespace AgentHub
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
         private int RightWPx { get { return Px(260); } }
-        private bool RightShown { get { return _mode >= 0 && _shown < 0; } }
+        // 右侧栏只服务普通工作站。协同模式自带面板（轮次/阶段/审批），再叠一条会把它挤掉。
+        private bool RightShown { get { return _mode == 0 && _shown < 0; } }
         private Rectangle RightPanelRect() { return new Rectangle(Width - RightWPx, 0, RightWPx, Height); }
         private Rectangle AddProcRect() { return new Rectangle(Width - RightWPx + Px(20), Px(150), RightWPx - Px(40), Px(64)); }
         private Rectangle SwitchModeRect() { return new Rectangle(Width - RightWPx + Px(20), Px(240), RightWPx - Px(40), Px(52)); }
