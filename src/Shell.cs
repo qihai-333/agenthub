@@ -185,6 +185,12 @@ namespace AgentHub
         }
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
+        private int RightWPx { get { return Px(260); } }
+        private bool RightShown { get { return _mode >= 0 && _shown < 0; } }
+        private Rectangle RightPanelRect() { return new Rectangle(Width - RightWPx, 0, RightWPx, Height); }
+        private Rectangle AddProcRect() { return new Rectangle(Width - RightWPx + Px(20), Px(150), RightWPx - Px(40), Px(64)); }
+        private Rectangle SwitchModeRect() { return new Rectangle(Width - RightWPx + Px(20), Px(240), RightWPx - Px(40), Px(52)); }
+
         private int SideExpandedPx { get { return Px(92); } }
         private int ItemSizePx { get { return Px(52); } }
         private int ItemStepPx { get { return Px(64); } }
@@ -424,6 +430,7 @@ namespace AgentHub
 
             if (_shown < 0) DrawModeChooser(g);
             if (boot) return;
+            if (RightShown) DrawRightPanel(g);
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
@@ -526,7 +533,7 @@ namespace AgentHub
         private void CardRects(out Rectangle a, out Rectangle b)
         {
             int left0 = _mode < 0 ? 0 : _sideW;
-            int cw = Width - left0;
+            int cw = Width - left0 - (RightShown ? RightWPx : 0);
             int gap = Px(48);
             int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
             int h = Px(300);
@@ -1730,6 +1737,17 @@ namespace AgentHub
                 return;
             }
 
+            if (_mode >= 0)
+            {
+                // 已选定模式：这里就是工作区。还没打开应用时给一句引导，别让整屏空着
+                if (_mode == 0)
+                    using (var f = new Font("微软雅黑", Px(20), FontStyle.Regular, GraphicsUnit.Pixel))
+                        TextRenderer.DrawText(g, "从左侧选择一个应用开始", f,
+                            new Rectangle(left, 0, Width - left - (RightShown ? RightWPx : 0), Height),
+                            Color.FromArgb(165, 165, 172),
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                return;
+            }
             // 入场顺序：图标 -> 标题 -> 卡片，总时长约 1.8 秒；点一下可跳过
             float pIcon = Clamp01(_enterT / 0.32f);
             float pTitle = Clamp01((_enterT - 0.26f) / 0.34f);
@@ -1738,7 +1756,7 @@ namespace AgentHub
             if (pIcon > 0.01f && _logo != null)
             {
                 int sz = Px(160);
-                int lx = left + (Width - left - sz) / 2;
+                int lx = left + (Width - left - (RightShown ? RightWPx : 0) - sz) / 2;
                 int ly = (int)(Height * 0.145f + (1f - pIcon) * Px(22));
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
@@ -1753,7 +1771,7 @@ namespace AgentHub
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
-                var r = new RectangleF(left, Height * 0.30f + (1f - pTitle) * Px(14), Width - left, Px(90));
+                var r = new RectangleF(left, Height * 0.30f + (1f - pTitle) * Px(14), Width - left - (RightShown ? RightWPx : 0), Px(90));
                 for (int i = 9; i >= 1; i--)
                 using (var br = new SolidBrush(Color.FromArgb((int)(20 * pTitle), 0, 0, 0)))
                     g.DrawString("选择你的工作模式", f, br,
@@ -1770,6 +1788,41 @@ namespace AgentHub
         }
 
         private static readonly Color TextBlack = Color.FromArgb(20, 20, 24);
+
+        private void DrawRightPanel(Graphics g)
+        {
+            Rectangle rp = RightPanelRect();
+            using (var b = new SolidBrush(Color.FromArgb(250, 250, 251)))
+                g.FillRectangle(b, rp);
+            using (var p = new Pen(Color.FromArgb(232, 232, 236)))
+                g.DrawLine(p, rp.X, 0, rp.X, Height);
+
+            using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(150, 150, 158)))
+                TextRenderer.DrawText(g, "当前模式", f, new Rectangle(rp.X + Px(20), Px(28), rp.Width - Px(40), Px(24)),
+                    Color.FromArgb(150, 150, 158), TextFormatFlags.Left);
+
+            using (var f = new Font("微软雅黑", Px(24), FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, _mode == 1 ? "多 agent 协同" : "普通工作站", f,
+                    new Rectangle(rp.X + Px(20), Px(58), rp.Width - Px(40), Px(40)),
+                    TextBlack, TextFormatFlags.Left);
+
+            Rectangle add = AddProcRect();
+            using (var path = Round(add, Px(14)))
+            using (var b = new SolidBrush(Orange))
+                g.FillPath(b, path);
+            using (var f = new Font("微软雅黑", Px(18), FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, "＋  添加进程", f, add, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+            Rectangle sw = SwitchModeRect();
+            using (var path = Round(sw, Px(12)))
+            using (var b = new SolidBrush(Color.FromArgb(240, 240, 243)))
+                g.FillPath(b, path);
+            using (var f = new Font("微软雅黑", Px(16), FontStyle.Regular, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, "切换模式", f, sw, Color.FromArgb(70, 70, 80),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
 
         private void DrawModeCard(Graphics g, Rectangle r, string title, string sub, bool selected)
         {
@@ -1991,6 +2044,12 @@ namespace AgentHub
             }
 
             if (e.Button != MouseButtons.Left) return;
+            if (RightShown && RightPanelRect().Contains(e.Location))
+            {
+                if (AddProcRect().Contains(e.Location)) { ShowAdd(); return; }
+                if (SwitchModeRect().Contains(e.Location)) { _mode = -1; _enterT = 0f; Invalidate(); return; }
+                return;
+            }
             if (_shown < 0)
             {
                 Rectangle ca, cb;
