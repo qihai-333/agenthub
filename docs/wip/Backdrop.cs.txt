@@ -1,0 +1,186 @@
+﻿using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+
+namespace AgentHub
+{
+    /// <summary>
+    /// 常驻背景粒子场。启动动画和主界面共用同一份实例：
+    /// 启动时粒子多、向中心汇聚；动画结束后同一个场进入空闲状态——数量减少、速度降低、连线变稀。
+    /// 参数集中在下面，方便微调。
+    /// </summary>
+    internal class Backdrop
+    {
+        // ===== 可调参数 =====
+        public const int MaxParticles = 88;      // 启动阶段粒子总数（规格 60~100）
+        public const int IdleParticles = 30;     // 空闲阶段保留数（规格 20~40）
+        public const float OrbitSpeed = 0.16f;   // 基础角速度，弧度/秒
+        public const float ConnectDist = 118f;   // 连线距离（px，未缩放）
+        public const int MaxLinks = 40;          // 每帧连线上限，避免出现密集网格
+        public const float GlowAlpha = 0.50f;    // 中心光晕基准强度
+        public const float MouseRadius = 150f;   // 鼠标影响半径
+        public const float MousePush = 22f;      // 鼠标附近的轻微排斥位移
+        public const float ConvergeFactor = 0.80f; // 汇聚时半径收缩到原来的多少
+
+        private struct Node
+        {
+            public float Ang;      // 角度
+            public float BaseR;    // 基础半径（0~1，相对半宽/半高）
+            public float CurR;     // 当前半径
+            public float Phase;    // 漂移相位
+            public float Drift;    // 漂移幅度
+            public int Layer;      // 0 背景 / 1 中景 / 2 前景
+            public float Size;     // 相对尺寸
+            public float Alpha;    // 相对透明度
+        }
+
+        private readonly Node[] _n = new Node[MaxParticles];
+        private readonly Random _rnd = new Random(20251019);
+        private float _t;
+        private float _w = 1, _h = 1;
+
+        public float MouseX = -9999, MouseY = -9999;
+        public bool Reduced;              // 系统"减少动态效果"
+
+        public Backdrop()
+        {
+            for (int i = 0; i < MaxParticles; i++) Reset(i);
+        }
+
+        private void Reset(int i)
+        {
+            // 半径分层：外圈是背景层，靠近中心的是前景层
+            float r = (float)(_rnd.NextDouble() * 0.92 + 0.08);
+            int layer = r > 0.66 ? 0 : (r > 0.34 ? 1 : 2);
+            _n[i].Ang = (float)(_rnd.NextDouble() * Math.PI * 2);
+            _n[i].BaseR = r;
+            _n[i].CurR = r;
+            _n[i].Phase = (float)(_rnd.NextDouble() * Math.PI * 2);
+            _n[i].Drift = (float)(_rnd.NextDouble() * 0.010 + 0.004);
+            _n[i].Layer = layer;
+            _n[i].Size = layer == 0 ? 1.7f : (layer == 1 ? 3.1f : 4.6f);
+            _n[i].Alpha = layer == 0 ? 0.55f : (layer == 1 ? 0.80f : 1.0f);
+        }
+
+        public void SetBounds(int w, int h) { _w = Math.Max(1, w); _h = Math.Max(1, h); }
+
+        /// <param name="dt">帧间隔（秒）</param>
+        /// <param name="pull">汇聚强度 0~1：开屏阶段冲向中心，结束后回落到 0</param>
+        /// <param name="idle">空闲态：速度降低、只保留部分粒子</param>
+        public void Step(float dt, float pull, bool idle)
+        {
+            if (dt <= 0f) return;
+            if (dt > 0.12f) dt = 0.12f;
+            _t += dt;
+
+            float speedScale = idle ? 0.42f : 1f;
+            for (int i = 0; i < MaxParticles; i++)
+            {
+                float sp = OrbitSpeed * (0.5f + _n[i].BaseR) * speedScale;
+                _n[i].Ang += sp * dt;
+
+                float target = _n[i].BaseR * (1f - ConvergeFactor * pull);
+                _n[i].CurR += (target - _n[i].CurR) * Math.Min(1f, dt * 2.0f);
+            }
+        }
+
+        private static readonly Color[] Palette =
+        {
+            Color.FromArgb(126, 152, 214),   // 背景层：淡蓝
+            Color.FromArgb(138, 128, 210),   // 中景层：淡紫
+            Color.FromArgb(104, 186, 206)    // 前景层：淡青
+        };
+
+        /// <param name="active">参与绘制的粒子数（空闲态只画前 IdleParticles 个）</param>
+        /// <param name="alphaScale">整体透明度（弹窗/协同模式可调低）</param>
+        /// <param name="avoid">这些区域不画粒子，保证文字与卡片干净</param>
+        public void Draw(Graphics g, int w, int h, int active, float alphaScale, Rectangle[] avoid)
+        {
+            if (Reduced) return;
+            SetBounds(w, h);
+            if (active > MaxParticles) active = MaxParticles;
+
+            float cx = w * 0.5f;
+            float cy = h * 0.42f;
+            float rx = w * 0.52f;
+            float ry = h * 0.46f;
+
+            // 先算位置，连线和光点共用
+            var px = new float[active];
+            var py = new float[active];
+            for (int i = 0; i < active; i++)
+            {
+                float drift = (float)Math.Sin(_t * 0.7f + _n[i].Phase) * _n[i].Drift;
+                float ang = _n[i].Ang + drift;
+                float r = _n[i].CurR;
+                px[i] = cx + (float)Math.Cos(ang) * rx * r;
+                py[i] = cy + (float)Math.Sin(ang) * ry * r;
+
+                // 鼠标附近的轻微排斥
+                float dx = px[i] - MouseX, dy = py[i] - MouseY;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < MouseRadius * MouseRadius && d2 > 1f)
+                {
+                    float d = (float)Math.Sqrt(d2);
+                    float k = (1f - d / MouseRadius) * MousePush;
+                    px[i] += dx / d * k;
+                    py[i] += dy / d * k;
+                }
+            }
+
+            if (InAny(avoid, px, py, active)) { /* 位置算完再判断跳过单个点 */ }
+
+            // 连线：只在中景及以上之间，按距离淡出，总数封顶
+            int links = 0;
+            using (var pen = new Pen(Palette[0], 1f))
+            {
+                for (int i = 0; i < active && links < MaxLinks; i++)
+                {
+                    if (_n[i].Layer == 0) continue;
+                    if (Hidden(avoid, px[i], py[i])) continue;
+                    for (int j = i + 1; j < active && links < MaxLinks; j++)
+                    {
+                        if (_n[j].Layer == 0) continue;
+                        if (Hidden(avoid, px[j], py[j])) continue;
+                        float dx = px[i] - px[j], dy = py[i] - py[j];
+                        float d = (float)Math.Sqrt(dx * dx + dy * dy);
+                        if (d > ConnectDist) continue;
+                        int a = (int)((1f - d / ConnectDist) * 46f * alphaScale);
+                        if (a < 4) continue;
+                        pen.Color = Color.FromArgb(a, 120, 140, 205);
+                        g.DrawLine(pen, px[i], py[i], px[j], py[j]);
+                        links++;
+                    }
+                }
+            }
+
+            // 光点
+            for (int i = 0; i < active; i++)
+            {
+                if (Hidden(avoid, px[i], py[i])) continue;
+                int a = (int)(255f * _n[i].Alpha * alphaScale);
+                if (a < 4) continue;
+                float s = _n[i].Size;
+                Color c = Palette[_n[i].Layer];
+                using (var br = new SolidBrush(Color.FromArgb(a, c)))
+                    g.FillEllipse(br, px[i] - s, py[i] - s, s * 2f, s * 2f);
+                if (_n[i].Layer == 2)
+                {
+                    // 前景加一圈很淡的外晕，做出景深
+                    using (var halo = new SolidBrush(Color.FromArgb(a / 4, c)))
+                        g.FillEllipse(halo, px[i] - s * 3f, py[i] - s * 3f, s * 6f, s * 6f);
+                }
+            }
+        }
+
+        private static bool InAny(Rectangle[] rects, float[] xs, float[] ys, int n) { return false; }
+
+        private static bool Hidden(Rectangle[] rects, float x, float y)
+        {
+            if (rects == null) return false;
+            for (int i = 0; i < rects.Length; i++)
+                if (rects[i].Contains((int)x, (int)y)) return true;
+            return false;
+        }
+    }
+}

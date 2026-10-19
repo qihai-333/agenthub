@@ -68,6 +68,7 @@ namespace AgentHub
         private float _enterDur = 2.5f;        // 开屏总时长（秒）；切换模式时用 0.35
         private readonly bool _reduceMotion = !Native.AnimationsEnabled();
         private Bitmap _logo;
+        private Bitmap _wordmark;
         private float _hoverT = 1f;
         private float _pressT;
         private int _pressIdx = -1;
@@ -625,10 +626,10 @@ namespace AgentHub
             int left0 = _mode < 0 ? 0 : _sideW;
             int cw = Width - left0 - (RightShown ? RightWPx : 0);
             int gap = Px(48);
-            int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
-            int h = Px(300);
+            int w = Math.Max(Px(240), Math.Min(Px(640), (cw - gap * 3) / 2));
+            int h = Px(250);
             int x0 = left0 + (cw - (w * 2 + gap)) / 2;
-            int y = (int)(Height * 0.44f);
+            int y = (int)(Height * 0.50f);
             a = new Rectangle(x0, y, w, h);
             b = new Rectangle(x0 + w + gap, y, w, h);
         }
@@ -1852,7 +1853,7 @@ namespace AgentHub
             float pCardA = Clamp01((T - 2.05f) / 0.45f);
             float pCardB = Clamp01((T - 2.12f) / 0.45f);
             float pCards = Math.Max(pCardA, pCardB);
-            float dark = 1f - Clamp01((T - 1.55f) / 0.55f);   // 深色开场，1.55s 后回落到浅色界面
+            float dark = 0f;   // 统一浅色：字标是白底，深色背景下会露白边
 
             int pad0 = RightShown ? RightWPx : 0;
             int areaW = Width - left - pad0;
@@ -1883,8 +1884,8 @@ namespace AgentHub
                     using (var pgb = new PathGradientBrush(path))
                     {
                         int ga = (int)(80 * pBg * (0.30f + 0.70f * dark));
-                        pgb.CenterColor = Color.FromArgb(Math.Max(0, Math.Min(255, ga)), 255, 150, 64);
-                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, 255, 150, 64) };
+                        pgb.CenterColor = Color.FromArgb(Math.Max(0, Math.Min(255, (int)(ga * 0.55f))), 130, 158, 232);
+                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, 130, 158, 232) };
                         g.FillEllipse(pgb, grc);
                     }
                 }
@@ -1919,22 +1920,23 @@ namespace AgentHub
             // ③ 图标：由小、低透明平稳浮现，稳定后一圈柔和光环
             if (pIcon > 0.01f && _logo != null)
             {
-                float sc = 0.88f + 0.12f * EaseOut(pIcon);
-                int sz = (int)(logoSize * sc);
-                Rectangle dr = new Rectangle(cx - sz / 2, cy - sz / 2, sz, sz);
+                // 字标：按 512:140 的比例横向排版，主视觉就是它
+                float sc = 0.94f + 0.06f * EaseOut(pIcon);
+                int wmW = (int)(Px(620) * sc);
+                int wmH = wmW * 140 / 512;
+                Rectangle dr = new Rectangle(cx - wmW / 2, cy - wmH / 2, wmW, wmH);
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
                 cm.Matrix33 = pIcon;
                 ia.SetColorMatrix(cm);
-                // 圆角裁切：logo.png 是白底方形，直接贴到深色开屏上会是个白方块
-                var stIcon = g.Save();
-                using (var clipPath = Round(dr, Px(30)))
-                    g.SetClip(clipPath);
-                g.DrawImage(_logo, dr, 0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, ia);
-                g.Restore(stIcon);
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                if (_wordmark != null)
+                    g.DrawImage(_wordmark, dr, 0, 0, _wordmark.Width, _wordmark.Height, GraphicsUnit.Pixel, ia);
+                else if (_logo != null)
+                    g.DrawImage(_logo, dr, 0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, ia);
                 ia.Dispose();
 
-                if (pRing > 0.001f && pRing < 0.999f)
+                if (false && pRing > 0.001f && pRing < 0.999f)
                 {
                     int rr = (int)(logoSize * 0.62f + logoSize * 0.55f * EaseOut(pRing));
                     int ra = (int)(110 * (1f - pRing));
@@ -1951,7 +1953,7 @@ namespace AgentHub
                 using (var f = new Font("Segoe UI", Px(44), FontStyle.Bold, GraphicsUnit.Pixel))
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center })
                 using (var br = new SolidBrush(Color.FromArgb((int)(255 * pBrand), brandCol)))
-                    g.DrawString("AgentHub", f, br,
+                    g.DrawString("", f, br,
                         new RectangleF(left, Height * 0.238f + rise, areaW, Px(58)), sf);
 
                 Color subCol = LerpColor(Color.FromArgb(170, 172, 182), Color.FromArgb(120, 120, 130), 1f - dark);
