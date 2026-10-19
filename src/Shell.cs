@@ -52,6 +52,7 @@ namespace AgentHub
         private int _hover = -1;
         private bool _hoverExit;
         private bool _plusHot;
+        private int _rpHot = -1;   // 右侧栏按钮悬停：0=添加进程 1=切换模式
 
         private int _pendingIdx = -1;
         private DateTime _deadline;
@@ -1830,16 +1831,19 @@ namespace AgentHub
                     TextBlack, TextFormatFlags.Left);
 
             Rectangle add = AddProcRect();
+            bool addOff = _agents.Count >= 18;
+            Color addCol = addOff ? Color.FromArgb(205, 205, 210)
+                          : (_rpHot == 0 ? ControlPaint.Light(Orange, 0.10f) : Orange);
             using (var path = Round(add, Px(14)))
-            using (var b = new SolidBrush(Orange))
+            using (var b = new SolidBrush(addCol))
                 g.FillPath(b, path);
             using (var f = new Font("微软雅黑", Px(18), FontStyle.Bold, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, "＋  添加进程", f, add, Color.White,
+                TextRenderer.DrawText(g, addOff ? "已达上限" : "＋  添加进程", f, add, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 
             Rectangle sw = SwitchModeRect();
             using (var path = Round(sw, Px(12)))
-            using (var b = new SolidBrush(Color.FromArgb(240, 240, 243)))
+            using (var b = new SolidBrush(_rpHot == 1 ? Color.FromArgb(228, 228, 233) : Color.FromArgb(240, 240, 243)))
                 g.FillPath(b, path);
             using (var f = new Font("微软雅黑", Px(16), FontStyle.Regular, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, "切换模式", f, sw, Color.FromArgb(70, 70, 80),
@@ -1980,6 +1984,10 @@ namespace AgentHub
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            {
+                int rp = RightShown ? (AddProcRect().Contains(e.Location) ? 0 : (SwitchModeRect().Contains(e.Location) ? 1 : -1)) : -1;
+                if (rp != _rpHot) { _rpHot = rp; Cursor = rp >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            }
 
             if (DockGone)
             {
