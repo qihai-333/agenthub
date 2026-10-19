@@ -129,6 +129,7 @@ namespace AgentHub
             _health.Start();
             _anim.Interval = 7;   // 约 144 帧，配合 timeBeginPeriod(1)
             _anim.Tick += AnimTick;
+            _anim.Start();   // 启动时就要跑：否则 _introT 一直是 0，侧栏图标画不出来
             _hideTimer.Interval = 250;
             _hideTimer.Tick += HideTick;
             _hideTimer.Start();
@@ -1946,6 +1947,7 @@ namespace AgentHub
                 Rectangle ca, cb;
                 CardRects(out ca, out cb);
                 if (ca.Contains(e.Location)) { ShowPipelineView(); return; }
+                if (cb.Contains(e.Location)) { _mode = 0; Invalidate(); return; }   // 普通工作站：只负责选中，应用由侧栏点
 
                 // 协同：输入阶段（卡 1 是任务输入框）
                 bool inputPhase = _mode == 1 && _tiled && !_picking && (_pipe == null || _pipe.Phase == PipePhase.Idle);
