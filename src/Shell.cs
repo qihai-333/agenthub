@@ -244,7 +244,7 @@ namespace AgentHub
             if (_pressT > 0f) { _pressT = Approach(_pressT, 0f, 0.30f); active = true; }
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
             if (_pendingIdx >= 0) { _spin = (_spin + 12) % 360; active = true; }
-            if (_tiled) { TileTick(); UpdateThumbs(); active = true; }
+            if (_tiled && _synPanel == null) { TileTick(); UpdateThumbs(); active = true; }
             if (_tiled && _tileIn < 1f) { _tileIn = Approach(_tileIn, 1f, 0.16f); active = true; }
 
             // 图标位置动画：向目标槽位缓动，延迟用来做"依次弹出"
@@ -300,6 +300,7 @@ namespace AgentHub
             if (DockGone || _shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - HotStripPx));
             if (Bounds.Width != w || Bounds.X != x || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
                 Bounds = new Rectangle(x, scr.Y, w, scr.Height);
+            LayoutSynergyPanel();   // 面板跟随主窗口/内容区尺寸变化
         }
 
         // ---------- 绘制 ----------
@@ -512,6 +513,8 @@ namespace AgentHub
         private Pipeline _pipe;
         private bool _picking;
         private bool _tiled;
+        // 协同自有控件界面：非空时用它展示输入/输出/状态，替代嵌入 AI 窗口与 DWM 缩略图
+        private SynergyPanel _synPanel;
         private float _tileIn;
         private readonly bool[] _tileDone = new bool[3];
         private readonly IntPtr[] _thumbs = new IntPtr[3];
@@ -892,6 +895,43 @@ namespace AgentHub
             }
         }
 
+        // ---------- 协同自有控件界面（SynergyPanel） ----------
+
+        // 建一次、复用：把协同主视图换成自有控件，并接管剪贴板接力
+        private void EnsureSynergyPanel()
+        {
+            if (_synPanel == null || _synPanel.IsDisposed)
+            {
+                // 面板自管：自建 Pipeline、自读 agents.json、OnHandleCreated 里自挂剪贴板监听
+                _synPanel = new SynergyPanel(PipeConfig.Load());
+                Controls.Add(_synPanel);
+                _synPanel.BringToFront();
+            }
+            LayoutSynergyPanel();
+            // 任务输入框交给面板内的工作区，旧的内嵌框藏起来
+            if (_taskBox != null) _taskBox.Visible = false;
+            _synPanel.Visible = true;
+            _synPanel.BringToFront();
+        }
+
+        // 面板铺满内容区（侧栏右侧），跟随主窗口/内容区变化
+        private void LayoutSynergyPanel()
+        {
+            if (_synPanel == null || _synPanel.IsDisposed) return;
+            Rectangle r = ClientContentRect;
+            if (_synPanel.Bounds != r) _synPanel.Bounds = r;
+        }
+
+        // 离开协同时卸载面板并断开剪贴板监听
+        private void RemoveSynergyPanel()
+        {
+            if (_synPanel == null) return;
+            try { _synPanel.Shutdown(); } catch { }   // 停 pump、摘掉剪贴板监听
+            try { Controls.Remove(_synPanel); } catch { }
+            try { _synPanel.Dispose(); } catch { }
+            _synPanel = null;
+        }
+
         // 把选中的三个角色摆成三栏平铺；已选但非角色的应用不杀，留给用户自己决定
         private void StartSynergy()
         {
@@ -911,10 +951,13 @@ namespace AgentHub
             _tiled = true;
             _focusIdx = -1;
             UnregisterThumbs();
+            EnsureSynergyPanel();   // 面板接管协同：用自有控件展示输入/输出/状态，不再嵌入 AI 窗口
             for (int k = 0; k < 3; k++) _tileDone[k] = false;
-            // 先进入平铺状态再启动，否则"进程已在运行"的角色会瞬间走完普通启动流程
-            foreach (int idx in _roles)
-                if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
+            // 面板模式下由 SynergyPanel 在发提示词时按需启动并前置 Agent；
+            // 这里不再预先把角色窗口抓进主窗（否则又回到嵌入老路）
+            if (_synPanel == null)
+                foreach (int idx in _roles)
+                    if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
             ApplyBounds();
             Invalidate();
         }
@@ -939,6 +982,7 @@ namespace AgentHub
             foreach (int idx in cur2) Cancel(idx);
             _roles.Clear();
             _tiled = false;
+            RemoveSynergyPanel();
             PipeReturnButton.Hide();
             UnregisterThumbs();
             for (int k = 0; k < 3; k++) _tileDone[k] = false;
@@ -954,6 +998,7 @@ namespace AgentHub
         private void AbandonSynergyKeepApps()
         {
             EndSessionIfAny();
+            RemoveSynergyPanel();
             PipeReturnButton.Hide();
             UnregisterThumbs();
             _tiled = false;
@@ -1209,6 +1254,7 @@ namespace AgentHub
         // 剪贴板一变就看看是不是"这一步的输出复制好了"
         private void ClipboardChanged()
         {
+            if (_synPanel != null) return;   // 面板激活时由 SynergyPanel 接管剪贴板接力，这里别再抢
             if (_mode != 1 || _pipe == null) return;
             if (!_pipe.Running || _pipe.ConfirmPending) return;   // 待确认/非运行时忽略（防迟到响应）
             string clip;
@@ -1645,12 +1691,12 @@ namespace AgentHub
 
             if (Width - _sideW < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
             // 输入框的显隐跟协同状态走，避免离开协同模式后残留文本框
-            bool showTask = _mode == 1 && _tiled && !_picking && (_pipe == null || _pipe.Phase == PipePhase.Idle);
+            bool showTask = _mode == 1 && _tiled && !_picking && _synPanel == null && (_pipe == null || _pipe.Phase == PipePhase.Idle);
             if (_taskBox != null && _taskBox.Visible != showTask) _taskBox.Visible = showTask;
             if (_mode == 1)
             {
                 if (_picking) DrawPipeline(g);
-                else DrawSynergy(g);
+                else if (_synPanel == null) DrawSynergy(g);
                 return;
             }
 
