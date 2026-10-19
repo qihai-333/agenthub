@@ -32,6 +32,10 @@ namespace AgentHub
         private readonly Button _openApp = new Button();
         private readonly Label _hint = new Label();
 
+        // 所有对话窗实例：InputUiBusy 用它判断是否有对话窗正开着（开着就不许抢前台，保护输入法候选窗）
+        internal static readonly System.Collections.Generic.List<AgentDialog> Open =
+            new System.Collections.Generic.List<AgentDialog>();
+
         public AgentDialog(Shell shell, int card, string agentId, string agentName, string roleName)
         {
             _shell = shell;
@@ -39,6 +43,7 @@ namespace AgentHub
             _agentId = agentId;
             _agentName = agentName;
             _roleName = roleName;
+            Open.Add(this);
 
             Text = "对话 · " + roleName + " · " + agentName;
             StartPosition = FormStartPosition.CenterScreen;

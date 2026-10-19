@@ -2915,6 +2915,9 @@ namespace AgentHub
         {
             if (_pendingIdx < 0) { _poll.Stop(); return; }
 
+            // 任何输入框正聚焦打字（含协同面板就地输入）：暂缓接管与超时判定，抢前台会把中文输入法候选窗打断
+            if (InputUiBusy.Busy()) { _deadline = _deadline.AddMilliseconds(_poll.Interval); return; }
+
             IntPtr h = Host.Find(_agents[_pendingIdx], _launchStamp);
             if (h != IntPtr.Zero) { _poll.Stop(); FinishStart(_pendingIdx, h); return; }
 

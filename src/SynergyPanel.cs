@@ -255,7 +255,6 @@ namespace AgentHub
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280f));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(root);
-            ExternalFields.Attach(this);   // 多行文本框改为点击弹出编辑窗口：本窗口 NOACTIVATE，就地输入法不可用
 
             // ---- 左：三个工作区，整体滚动（窗口变小时不压扁输入框）----
             var scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
@@ -561,7 +560,7 @@ namespace AgentHub
                 {
                     _focusJob = null;
                 }
-                else
+                else if (!InputUiBusy.Busy())   // 任何输入框正聚焦打字（含就地输入）：让路，抢前台会把中文输入法候选窗打断
                 {
                     IntPtr hwnd = Win32.FindAgentWindow(_focusJob.Agent);
                     if (hwnd != IntPtr.Zero)
@@ -975,6 +974,7 @@ namespace AgentHub
             readonly Button _btnSend, _btnApprove, _btnFillNext, _btnRerun, _btnPasteReply, _btnRaw, _btnCopy;
             readonly Button _tabDec, _tabAlign;
             bool _syncAgent;
+            string _lastSyncedInput = "";          // 上次与流水线同步的输入文本：区分「上游有新内容」与「用户自己的草稿」
 
             public WorkspacePanel(SynergyPanel owner, string title, int wsIndex, bool dualView)
             {
@@ -992,7 +992,6 @@ namespace AgentHub
                 root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // 输入/输出
                 root.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // 按钮行
                 Controls.Add(root);
-            ExternalFields.Attach(this);   // 多行文本框改为点击弹出编辑窗口：本窗口 NOACTIVATE，就地输入法不可用
 
                 // ---- 标题行 ----
                 var head = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
@@ -1154,22 +1153,29 @@ namespace AgentHub
                 string wantInput = st != null ? (st.PreparedInput ?? "") : "";
                 if (_input.Focused)
                 {
-                    _lbUpdated.Text = (_input.Text != wantInput && wantInput.Length > 0) ? " 有新交接内容，点击拉取" : "";
+                    // 只在上游内容真的变了、且本地自上次同步后没被用户改过时才提示「点击拉取」；
+                    // 弹窗编辑回填后本地比上游新，绝不能提示，否则用户一点拉取就把自己的草稿冲掉了
+                    _lbUpdated.Text = (wantInput.Length > 0 && wantInput != _input.Text && _input.Text == _lastSyncedInput)
+                        ? " 有新交接内容，点击拉取" : "";
                 }
                 else
                 {
-                    if (_input.Text != wantInput) { _input.Text = wantInput; _input.Modified = false; }
+                    // 本地没被改过才允许被上游覆盖：弹窗回填的内容是用户的草稿，界面刷新无权冲掉
+                    if (_input.Text != wantInput && _input.Text == _lastSyncedInput) { _input.Text = wantInput; _input.Modified = false; }
+                    _lastSyncedInput = wantInput;
                     _lbUpdated.Text = "";
                 }
                 bool inputEditable = idleStart || (thisIsCur && st.Status != StageState.Running);
-                _input.ReadOnly = !inputEditable;
-                _input.BackColor = _input.ReadOnly ? Color.FromArgb(246, 246, 246) : Color.White;
+                // 就地输入：协同模式下主窗已摘除 NOACTIVATE 并成为前台（Shell.EnsureSynergyPanel），输入法可直接附着
+                // 仅值变化时才设置：每 200ms 重复发 EM_SETREADONLY 会打扰正在进行的输入法组合
+                if (_input.ReadOnly == inputEditable) _input.ReadOnly = !inputEditable;
+                _input.BackColor = inputEditable ? Color.White : Color.FromArgb(246, 246, 246);
 
                 // 输出框：输出完成后才允许编辑（运行中锁定，避免刷新覆盖用户编辑）
                 string wantOutput = st != null ? (st.HandoffText ?? "") : "";
                 bool outputEditable = thisIsCur && (st.Status == StageState.AwaitingApproval || st.Status == StageState.HandedOff);
-                _output.ReadOnly = !outputEditable;
-                _output.BackColor = _output.ReadOnly ? Color.FromArgb(246, 246, 246) : Color.White;
+                if (_output.ReadOnly == outputEditable) _output.ReadOnly = !outputEditable;   // 就地编辑，值变化才设置
+                _output.BackColor = outputEditable ? Color.White : Color.FromArgb(246, 246, 246);
                 if (!_output.Focused && _output.Text != wantOutput) { _output.Text = wantOutput; _output.Modified = false; }
 
                 // 状态徽标
@@ -1212,6 +1218,7 @@ namespace AgentHub
                 if (st == null) return;
                 _input.Text = st.PreparedInput ?? "";
                 _input.Modified = false;
+                _lastSyncedInput = _input.Text;
                 _lbUpdated.Text = "";
             }
 
