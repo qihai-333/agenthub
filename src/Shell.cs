@@ -31,6 +31,9 @@ namespace AgentHub
         private int _sideW;
 
         private readonly HashSet<int> _chosen = new HashSet<int>();
+        // 本次会话里"由我们启动"的应用（按 agent 索引）。Electron 的 exe 只是启动器，
+        // 真正持有窗口的是另一个 pid，所以不能用 pid 反推归属，只能记住"是我点的启动"。
+        private readonly HashSet<int> _launchedByMe = new HashSet<int>();
         private int _shown = -1;
         private readonly Dictionary<int, IntPtr> _windows = new Dictionary<int, IntPtr>();
         private readonly Dictionary<int, int> _pids = new Dictionary<int, int>();
@@ -2471,6 +2474,7 @@ namespace AgentHub
             if (h != IntPtr.Zero) { FinishStart(i, h); return; }
 
             MarkSplash(a.Id, "启动中", 1);
+            _launchedByMe.Add(i);   // 从这一刻起，这个应用的窗口进程算我方
             try { Host.Launch(a, hidden); }
             catch (Exception ex)
             {
@@ -2537,7 +2541,7 @@ namespace AgentHub
                     IntPtr better = Host.FindVisible(_agents[i], DateTime.MinValue);
                     if (better != IntPtr.Zero) { hwnd = better; Native.GetWindowThreadProcessId(hwnd, out pid); }
                 }
-                Host.Register((int)pid, false);   // 非我方启动的窗口；若本次是我 Launch 的，Launch 已登记为 true，不会被覆盖
+                Host.Register((int)pid, _launchedByMe.Contains(i));   // 我启动的才算我方，否则只是接管了别人的
             _pids[i] = (int)pid;
                 _windows[i] = hwnd;
                 _shown = -1;
@@ -2571,7 +2575,7 @@ namespace AgentHub
             }
 
             // 先把自己缩成侧栏，否则铺满的窗口会盖住刚要显示的应用
-            Host.Register((int)pid, false);   // 非我方启动的窗口；若本次是我 Launch 的，Launch 已登记为 true，不会被覆盖
+            Host.Register((int)pid, _launchedByMe.Contains(i));   // 我启动的才算我方，否则只是接管了别人的
             _pids[i] = (int)pid;
             _windows[i] = hwnd;
             _shown = i;
