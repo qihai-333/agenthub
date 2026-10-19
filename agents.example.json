@@ -6,7 +6,8 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\DeepSeek Harness.exe",
     "proc": "DeepSeek Harness",
-    "title": "DeepSeek Harness"
+    "title": "DeepSeek Harness",
+    "color": "#ffb340"
   },
   {
     "id": "doubao",
@@ -15,7 +16,8 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\Doubao.exe",
     "proc": "Doubao",
-    "title": "豆包"
+    "title": "豆包",
+    "color": "#ffb340"
   },
   {
     "id": "trae",
@@ -24,7 +26,8 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\Trae CN.exe",
     "proc": "Trae CN",
-    "title": "Trae"
+    "title": "Trae",
+    "color": "#4fa8ff"
   },
   {
     "id": "qoder",
@@ -33,7 +36,8 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\Qoder CN Launcher.exe",
     "proc": "Qoder CN,Qoder CN Launcher",
-    "title": "Qoder"
+    "title": "Qoder",
+    "color": "#8b7bff"
   },
   {
     "id": "workbuddy",
@@ -42,7 +46,8 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\WorkBuddy.exe",
     "proc": "WorkBuddy",
-    "title": "WorkBuddy"
+    "title": "WorkBuddy",
+    "color": "#e6b446"
   },
   {
     "id": "codex",
@@ -52,7 +57,8 @@
     "exe": "C:\\Path\\To\\ChatGPT.lnk",
     "proc": "ChatGPT",
     "title": "ChatGPT",
-    "frame": "offset"
+    "frame": "offset",
+    "color": "#35c48a"
   },
   {
     "id": "tabbit",
@@ -61,6 +67,7 @@
     "kind": "exe",
     "exe": "C:\\Path\\To\\Tabbit Browser.exe",
     "proc": "Tabbit Browser",
-    "title": "Tabbit"
+    "title": "Tabbit",
+    "color": "#6ec8e6"
   }
 ]

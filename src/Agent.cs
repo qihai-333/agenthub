@@ -18,6 +18,7 @@ namespace AgentHub
         public string Proc { get; set; }
         public string Title { get; set; }
         public string Frame { get; set; }
+        public string Color { get; set; }   // 方案 D：可选主题色 "#rrggbb"，每应用一盏灯
         public bool Custom { get; set; }
 
         public bool OffsetFrame

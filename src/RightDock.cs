@@ -18,7 +18,7 @@ namespace AgentHub
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             // 不加 TopMost：和左侧栏一样待在普通窗口层，不会盖住用户自己的窗口
-            BackColor = Color.FromArgb(250, 250, 251);
+            BackColor = Color.FromArgb(14, 16, 22);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint, true);
         }
@@ -57,21 +57,30 @@ namespace AgentHub
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var b = new SolidBrush(BackColor)) g.FillRectangle(b, ClientRectangle);
-            using (var p = new Pen(Color.FromArgb(232, 232, 236))) g.DrawLine(p, 0, 0, 0, Height);
+            // 深空岩板底：纵向明暗 + 顶部高光棱
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(ClientRectangle,
+                Color.FromArgb(24, 26, 36), Color.FromArgb(12, 14, 20),
+                System.Drawing.Drawing2D.LinearGradientMode.Vertical))
+                g.FillRectangle(lg, ClientRectangle);
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, Width, Math.Max(2, 30)),
+                Color.FromArgb(60, 255, 255, 255), Color.Transparent,
+                System.Drawing.Drawing2D.LinearGradientMode.Vertical))
+                g.FillRectangle(lg, new Rectangle(0, 0, Width, Math.Max(2, 30)));
+            using (var p = new Pen(Color.FromArgb(40, 40, 52)))
+                g.DrawLine(p, 0, 0, 0, Height);
 
             using (var f = new Font("微软雅黑", 13f, FontStyle.Regular, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, "当前模式", f, new Rectangle(20, 28, Width - 40, 22),
-                    Color.FromArgb(150, 150, 158), TextFormatFlags.Left);
+                    Color.FromArgb(154, 154, 163), TextFormatFlags.Left);
 
             using (var f = new Font("微软雅黑", 24f, FontStyle.Bold, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, _shell.ModeTitle(), f, new Rectangle(20, 58, Width - 40, 38),
-                    Color.FromArgb(20, 20, 24), TextFormatFlags.Left);
+                    Color.FromArgb(232, 232, 238), TextFormatFlags.Left);
 
             Rectangle add = AddRect();
             bool off = _shell.AgentCount >= 18;
-            Color addCol = off ? Color.FromArgb(205, 205, 210)
-                          : (_hot == 0 ? ControlPaint.Light(Color.Orange, 0.10f) : Color.Orange);
+            Color addCol = off ? Color.FromArgb(60, 60, 70)
+                          : (_hot == 0 ? ControlPaint.Light(Shell.AccentDefault, 0.10f) : Shell.AccentDefault);
             using (var path = Round(add, 14))
             using (var b = new SolidBrush(addCol))
                 g.FillPath(b, path);
@@ -81,10 +90,14 @@ namespace AgentHub
 
             Rectangle sw = SwitchRect();
             using (var path = Round(sw, 12))
-            using (var b = new SolidBrush(_hot == 1 ? Color.FromArgb(228, 228, 233) : Color.FromArgb(240, 240, 243)))
-                g.FillPath(b, path);
+            {
+                using (var b = new SolidBrush(_hot == 1 ? Color.FromArgb(38, 40, 52) : Color.FromArgb(24, 26, 36)))
+                    g.FillPath(b, path);
+                using (var p2 = new Pen(Color.FromArgb(44, 46, 58)))
+                    g.DrawPath(p2, path);
+            }
             using (var f = new Font("微软雅黑", 16f, FontStyle.Regular, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, "切换模式", f, sw, Color.FromArgb(70, 70, 80),
+                TextRenderer.DrawText(g, "切换模式", f, sw, Color.FromArgb(200, 201, 210),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 

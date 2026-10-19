@@ -15,15 +15,17 @@ namespace AgentHub
         private const int HotkeyBase = 100;
         private const int HotkeyToggle = 200;
 
-        private static readonly Color Bg = Color.FromArgb(11, 11, 13);
-        private static readonly Color SideBg = Color.FromArgb(8, 8, 10);
-        private static readonly Color BgHover = Color.FromArgb(24, 24, 28);
-        private static readonly Color Line = Color.FromArgb(28, 28, 33);
-        private static readonly Color Orange = Color.FromArgb(255, 122, 26);
+        // 方案 D · 纵深 Space：深空分层材质色板
+        private static readonly Color Bg = Color.FromArgb(10, 12, 16);          // 深空底 #0A0C10
+        private static readonly Color SideBg = Color.FromArgb(14, 16, 22);      // 岩板基色（浅端）
+        private static readonly Color BgHover = Color.FromArgb(30, 32, 42);
+        private static readonly Color Line = Color.FromArgb(36, 38, 48);
+        private static readonly Color Orange = Color.FromArgb(255, 179, 64);    // 豆包·橙（全局兼容保留）
         private static readonly Color OrangeDim = Color.FromArgb(122, 58, 14);
-        private static readonly Color TextMain = Color.FromArgb(234, 234, 238);
-        private static readonly Color TextDim = Color.FromArgb(138, 138, 148);
-        private static readonly Color TextFaint = Color.FromArgb(74, 74, 82);
+        private static readonly Color TextMain = Color.FromArgb(232, 232, 238);
+        private static readonly Color TextDim = Color.FromArgb(154, 154, 163);
+        private static readonly Color TextFaint = Color.FromArgb(92, 92, 102);
+        internal static readonly Color AccentDefault = Color.FromArgb(139, 123, 255);   // 默认环境光 #8B7BFF
 
         private readonly List<Agent> _agents;
         private readonly float _s;
@@ -73,6 +75,13 @@ namespace AgentHub
         private int _pressIdx = -1;
         private float _expandT = 1f;
         private float _spin;
+
+        // 方案 D：环境光当前色（平滑过渡）、呼吸相位、星空/噪点缓存
+        private Color _acc = AccentDefault;
+        private float _breath;
+        private Bitmap _starBmp;
+        private Size _starSize;
+        private Bitmap _noiseBmp;
 
         // 侧栏状态机：以前是 _hiddenToTray / _dockHidden / _slideT 三个变量互相协作，
         // 小 bug 全出在它们打架上。现在收敛成一个枚举，_slideT 只负责动画进度。
@@ -135,6 +144,8 @@ namespace AgentHub
             _pOrange = new Pen(Orange, Math.Max(1.5f, Px(2) * 0.9f));
             _pRing = new Pen(OrangeDim, Math.Max(1.6f, Px(2) * 0.8f));
 
+            _noiseBmp = BuildNoise();
+
             try
             {
                 this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -181,6 +192,17 @@ namespace AgentHub
                                 }
                             }
                         }
+                }
+            }
+            catch { }
+
+            // 开屏改为深空底：白底 logo 去底，保留彩色主体
+            try
+            {
+                if (_logo != null)
+                {
+                    Bitmap keyed = KeyWhite(_logo);
+                    if (keyed != null) { _logo.Dispose(); _logo = keyed; }
                 }
             }
             catch { }
@@ -253,8 +275,6 @@ namespace AgentHub
         private bool RightShown { get { return _rightDock != null && _rightDock.Visible; } }
         private RightDock _rightDock;
         private int _fpsFrames;
-        private Bitmap _bgBmp;
-        private Size _bgSize;
         private DateTime _fpsMark = DateTime.Now;
 
         public string ModeTitle() { return _mode == 1 ? "多 agent 协同" : "普通工作站"; }
@@ -341,6 +361,287 @@ namespace AgentHub
                 (int)Math.Round(a.B + (b.B - a.B) * t));
         }
 
+        // ---------- 方案 D · 纵深 Space：主题色与深空绘制 ----------
+
+        // 每应用一盏主题色：优先配置里可选的 "color":"#rrggbb"，其次内置 id 映射，最后稳定散列回退
+        internal static Color AppHue(Agent a)
+        {
+            if (a != null)
+            {
+                string c = a.Color;
+                if (!string.IsNullOrEmpty(c))
+                {
+                    try
+                    {
+                        string t = c.Trim().TrimStart('#');
+                        if (t.Length == 6)
+                            return Color.FromArgb(255,
+                                Convert.ToInt32(t.Substring(0, 2), 16),
+                                Convert.ToInt32(t.Substring(2, 2), 16),
+                                Convert.ToInt32(t.Substring(4, 2), 16));
+                    }
+                    catch { }
+                }
+                if (!string.IsNullOrEmpty(a.Id))
+                {
+                    switch (a.Id.ToLowerInvariant())
+                    {
+                        case "doubao": return Color.FromArgb(255, 179, 64);     // 豆包·橙
+                        case "dsh": return Color.FromArgb(255, 179, 64);        // DSH·橙
+                        case "trae": return Color.FromArgb(79, 168, 255);       // Trae·蓝
+                        case "qoder": return Color.FromArgb(139, 123, 255);     // Qoder·紫
+                        case "codex": return Color.FromArgb(53, 196, 138);      // Codex·绿
+                        case "tabbit": return Color.FromArgb(110, 200, 230);    // Tabbit·青
+                        case "workbuddy": return Color.FromArgb(230, 180, 70);  // WorkBuddy·琥珀
+                    }
+                }
+            }
+            Color[] pal = new Color[]
+            {
+                AccentDefault, Color.FromArgb(90, 140, 255), Color.FromArgb(70, 190, 150),
+                Color.FromArgb(200, 110, 220), Color.FromArgb(230, 90, 110), Color.FromArgb(110, 200, 230)
+            };
+            int h = Math.Abs((a != null && a.Name != null ? a.Name : "?").GetHashCode());
+            return pal[h % pal.Length];
+        }
+
+        private static bool ColorClose(Color a, Color b)
+        {
+            return Math.Abs(a.R - b.R) <= 2 && Math.Abs(a.G - b.G) <= 2 && Math.Abs(a.B - b.B) <= 2;
+        }
+
+        // 环境光强度：显示应用时最强（点亮整层岩板），其余时候弱染
+        private float AmbientAlpha()
+        {
+            return _shown >= 0 ? 1f : 0.45f;
+        }
+
+        // 噪点玻璃纹理：极淡颗粒，抵消纯色塑料感（一次性生成）
+        private static Bitmap BuildNoise()
+        {
+            var bmp = new Bitmap(128, 128, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            var rnd = new Random(7);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.Transparent);
+                for (int i = 0; i < 2600; i++)
+                {
+                    int x = rnd.Next(0, 128), y = rnd.Next(0, 128);
+                    int v = 150 + rnd.Next(0, 90);
+                    int a = 4 + rnd.Next(0, 9);
+                    bmp.SetPixel(x, y, Color.FromArgb(a, v, v, Math.Min(255, v + 8)));
+                }
+            }
+            return bmp;
+        }
+
+        // 把白底 logo 去底：近白像素按亮度做透明，保留彩色主体（开屏深空用）
+        private static Bitmap KeyWhite(Bitmap src)
+        {
+            if (src == null) return null;
+            var dst = new Bitmap(src.Width, src.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            int len = src.Width * src.Height;
+            var rect = new Rectangle(0, 0, src.Width, src.Height);
+            var bd = src.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            byte[] sb = new byte[len * 4];
+            System.Runtime.InteropServices.Marshal.Copy(bd.Scan0, sb, 0, sb.Length);
+            src.UnlockBits(bd);
+            for (int i = 0; i < len; i++)
+            {
+                int k = i * 4;
+                byte b = sb[k], gr = sb[k + 1], r = sb[k + 2], a = sb[k + 3];
+                int mn = Math.Min(r, Math.Min(gr, b));
+                if (mn > 180) a = (byte)Math.Max(0, Math.Min(255, (int)((255 - mn) * 3.2f)));
+                sb[k + 3] = a;
+            }
+            var dd = dst.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            System.Runtime.InteropServices.Marshal.Copy(sb, 0, dd.Scan0, sb.Length);
+            dst.UnlockBits(dd);
+            return dst;
+        }
+
+        // 星空底图缓存：星云晕染 + 星点
+        private void EnsureStarfield(int w, int h)
+        {
+            if (w <= 0 || h <= 0) return;
+            if (_starBmp != null && _starSize == new Size(w, h)) return;
+            if (_starBmp != null) { _starBmp.Dispose(); _starBmp = null; }
+            _starBmp = new Bitmap(w, h);
+            _starSize = new Size(w, h);
+            using (var g = Graphics.FromImage(_starBmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.FromArgb(10, 12, 16));
+                DrawNebula(g, w, h, 0.62f, 0.20f, Color.FromArgb(120, 100, 200), 0.13f, Math.Max(120, Px(420)));
+                DrawNebula(g, w, h, 0.22f, 0.58f, Color.FromArgb(60, 140, 200), 0.10f, Math.Max(110, Px(360)));
+                DrawNebula(g, w, h, 0.84f, 0.74f, Color.FromArgb(200, 120, 90), 0.07f, Math.Max(100, Px(300)));
+                var rnd = new Random(20261019);
+                for (int i = 0; i < 180; i++)
+                {
+                    int x = rnd.Next(0, w), y = rnd.Next(0, h);
+                    int r2 = 1 + rnd.Next(0, 2);
+                    int a = 30 + rnd.Next(0, 140);
+                    int warm = rnd.Next(0, 5);
+                    Color sc = warm == 0 ? Color.FromArgb(a, 255, 224, 196)
+                              : warm == 1 ? Color.FromArgb(a, 186, 214, 255)
+                              : warm == 2 ? Color.FromArgb(a, 226, 208, 255)
+                              : warm == 3 ? Color.FromArgb(a, 200, 232, 255)
+                              : Color.FromArgb(a, 255, 255, 255);
+                    using (var b = new SolidBrush(sc))
+                        g.FillEllipse(b, x, y, r2 + 1, r2 + 1);
+                }
+            }
+        }
+
+        private static void DrawNebula(Graphics g, int w, int h, float fx, float fy, Color c, float alpha, int rad)
+        {
+            int cx = (int)(w * fx), cy = (int)(h * fy);
+            Rectangle grc = new Rectangle(cx - rad / 2, cy - rad / 2, rad, rad);
+            using (var path = new GraphicsPath())
+            {
+                path.AddEllipse(grc);
+                using (var pgb = new PathGradientBrush(path))
+                {
+                    pgb.CenterColor = Color.FromArgb((int)(255 * alpha), c.R, c.G, c.B);
+                    pgb.SurroundColors = new Color[] { Color.FromArgb(0, c.R, c.G, c.B) };
+                    g.FillEllipse(pgb, grc);
+                }
+            }
+        }
+
+        private void DrawStarfield(Graphics g, Rectangle r)
+        {
+            EnsureStarfield(r.Width, r.Height);
+            if (_starBmp == null) { g.Clear(Bg); return; }
+            g.DrawImageUnscaled(_starBmp, r.X, r.Y);
+        }
+
+        // 整层环境光：屏幕随选中应用色缓慢染上一层
+        private void DrawAmbient(Graphics g, Rectangle full)
+        {
+            Color hue = _acc;
+            int gr = Math.Max(full.Width, full.Height) * 2;
+            Rectangle grc = new Rectangle(full.X - gr / 3, full.Y - (gr - full.Height) / 2, gr, gr);
+            using (var path = new GraphicsPath())
+            {
+                path.AddEllipse(grc);
+                using (var pgb = new PathGradientBrush(path))
+                {
+                    pgb.CenterColor = Color.FromArgb((int)(16 * AmbientAlpha() + 6), hue.R, hue.G, hue.B);
+                    pgb.SurroundColors = new Color[] { Color.FromArgb(0, hue.R, hue.G, hue.B) };
+                    g.FillEllipse(pgb, grc);
+                }
+            }
+        }
+
+        // 深空岩板 Dock：纵向明暗 + 顶部高光棱 + 噪点玻璃 + 底部内阴影 + 选中整层点亮
+        private void DrawRockSlab(Graphics g, int x, int w, int h)
+        {
+            if (w <= 0 || h <= 0) return;
+            Rectangle side = new Rectangle(x, 0, w, h);
+            using (var lg = new LinearGradientBrush(side, Color.FromArgb(24, 26, 36), Color.FromArgb(12, 14, 20), LinearGradientMode.Vertical))
+                g.FillRectangle(lg, side);
+            int hi = Math.Max(2, Px(30));
+            using (var lg = new LinearGradientBrush(new Rectangle(side.X, 0, side.Width, hi), Color.FromArgb(70, 255, 255, 255), Color.Transparent, LinearGradientMode.Vertical))
+                g.FillRectangle(lg, new Rectangle(side.X, 0, side.Width, hi));
+            using (var p = new Pen(Color.FromArgb(55, 255, 255, 255)))
+                g.DrawLine(p, side.X + Px(4), 1, side.Right - Px(4), 1);
+            if (_noiseBmp != null)
+            {
+                using (var tb = new TextureBrush(_noiseBmp))
+                {
+                    tb.WrapMode = WrapMode.Tile;
+                    g.FillRectangle(tb, side);
+                }
+            }
+            int sh = Math.Max(2, Px(56));
+            using (var lg = new LinearGradientBrush(new Rectangle(side.X, side.Bottom - sh, side.Width, sh),
+                Color.Transparent, Color.FromArgb(110, 0, 0, 0), LinearGradientMode.Vertical))
+                g.FillRectangle(lg, new Rectangle(side.X, side.Bottom - sh, side.Width, sh));
+            if (_shown >= 0 && _shown < _agents.Count)
+            {
+                Rectangle pr = ShownPillRect(_shown);
+                Color hue = AppHue(_agents[_shown]);
+                int cx = pr.X + pr.Width / 2, cy = pr.Y + pr.Height / 2;
+                int gr = Math.Max(Px(150), (int)(pr.Width * 2.4f));
+                Rectangle grc = new Rectangle(cx - gr / 2, cy - gr / 2, gr, gr);
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(grc);
+                    using (var pgb = new PathGradientBrush(path))
+                    {
+                        pgb.CenterColor = Color.FromArgb((int)(58 * AmbientAlpha()), hue.R, hue.G, hue.B);
+                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, hue.R, hue.G, hue.B) };
+                        g.FillEllipse(pgb, grc);
+                    }
+                }
+            }
+            using (var p = new Pen(Color.FromArgb(44, 46, 58)))
+                g.DrawLine(p, side.Right - 1, 0, side.Right - 1, h);
+        }
+
+        // 光带：无应用铺满内容区时，从 Dock 右缘流向内容（圆锥软光面）
+        private void DrawBeam(Graphics g)
+        {
+            if (_shown >= 0 || _mode < 0) return;
+            int bw = Math.Max(Px(24), Math.Min(Px(150), Width - _sideW));
+            if (bw <= 1) return;
+            Rectangle rr = new Rectangle(_sideW, 0, bw, Height);
+            Color hue = _acc;
+            using (var lg = new LinearGradientBrush(rr,
+                Color.FromArgb((int)(55 * AmbientAlpha()), hue.R, hue.G, hue.B),
+                Color.FromArgb(0, hue.R, hue.G, hue.B), LinearGradientMode.Horizontal))
+                g.FillRectangle(lg, rr);
+        }
+
+        // 星芒闪烁点缀：开屏用
+        private static readonly float[,] SparkSpots = new float[,]
+        {
+            { 0.12f, 0.20f }, { 0.30f, 0.10f }, { 0.52f, 0.24f }, { 0.72f, 0.13f }, { 0.88f, 0.30f },
+            { 0.20f, 0.50f }, { 0.44f, 0.38f }, { 0.64f, 0.55f }, { 0.84f, 0.68f }, { 0.36f, 0.72f },
+            { 0.08f, 0.40f }, { 0.95f, 0.52f }
+        };
+        private void DrawSparks(Graphics g, Rectangle full)
+        {
+            for (int i = 0; i < SparkSpots.GetLength(0); i++)
+            {
+                float tw = (float)Math.Sin(_breath * 1.7f + i * 0.9f);
+                float a = 0.12f + 0.55f * (tw * 0.5f + 0.5f);
+                int x = (int)(full.Width * SparkSpots[i, 0]);
+                int y = (int)(full.Height * SparkSpots[i, 1]);
+                int s = Px(3 + (i % 3));
+                using (var pen = new Pen(Color.FromArgb((int)(255 * a), 214, 204, 255), Math.Max(1f, (float)Px(1))))
+                {
+                    g.DrawLine(pen, x - s, y, x + s, y);
+                    g.DrawLine(pen, x, y - s, x, y + s);
+                }
+            }
+        }
+
+        // 选中「浮起」的岩板亮面：外发光 + 应用色渐变 + 顶部高光 + 描边
+        private void DrawSelectedPill(Graphics g, Rectangle pr, Color hue)
+        {
+            using (var glow = new Pen(Color.FromArgb(85, hue.R, hue.G, hue.B), Math.Max(4f, Px(6))))
+            using (GraphicsPath gp = Round(new Rectangle(pr.X - Px(4), pr.Y - Px(4), pr.Width + Px(8), pr.Height + Px(8)), Px(14)))
+                g.DrawPath(glow, gp);
+
+            using (GraphicsPath p = Round(pr, Px(12)))
+            {
+                using (var lg = new LinearGradientBrush(pr, Blend(hue, Color.FromArgb(24, 27, 38), 0.72f), Color.FromArgb(12, 13, 18), LinearGradientMode.Vertical))
+                    g.FillPath(lg, p);
+                var clip = g.Save();
+                g.SetClip(p);
+                using (var lg2 = new LinearGradientBrush(new Rectangle(pr.X, pr.Y, pr.Width, Math.Max(2, pr.Height / 2)),
+                    Color.FromArgb(50, 255, 255, 255), Color.Transparent, LinearGradientMode.Vertical))
+                    g.FillRectangle(lg2, pr);
+                g.Restore(clip);
+                using (var pen = new Pen(Blend(hue, Color.White, 0.18f), Math.Max(1.2f, (float)Px(1))))
+                    g.DrawPath(pen, p);
+            }
+        }
+
         private void Kick()
         {
             if (_anim.Enabled) return;
@@ -365,6 +666,7 @@ namespace AgentHub
                 // 按真实时间推进，不数 tick：定时器精度不稳定时节奏才不会忽快忽慢
                 _enterT = Clamp01((float)_enterClock.Elapsed.TotalSeconds / _enterDur);
                 if (_enterT >= 1f) _enterT = 1f;
+                _breath += 0.10f;   // 开屏星芒闪烁相位
                 active = true;
             }
             if (_hoverT < 1f) { _hoverT = Approach(_hoverT, 1f, 0.22f); active = true; }
@@ -413,7 +715,32 @@ namespace AgentHub
                 ApplyBounds();
             }
 
-            if (active) Invalidate();
+            // 方案 D：环境光向目标应用色平滑过渡（约 500ms 色彩交叉渐变）
+            Color want = AccentDefault;
+            if (_shown >= 0 && _shown < _agents.Count) want = AppHue(_agents[_shown]);
+            else
+                foreach (int ci in _chosen)
+                    if (ci >= 0 && ci < _agents.Count) { want = AppHue(_agents[ci]); break; }
+            if (_acc != want)
+            {
+                _acc = Blend(_acc, want, 0.045f);
+                if (ColorClose(_acc, want)) _acc = want;
+                active = true;
+            }
+
+            // 运行光点呼吸：已选应用常驻轻动效（只重绘 Dock 区域）
+            bool dockBreath = _mode >= 0 && _chosen.Count > 0 && !DockGone;
+            if (dockBreath)
+            {
+                _breath += 0.07f;
+                active = true;
+            }
+
+            if (active)
+            {
+                bool settled = Math.Abs(_slideT - st) < 0.002f && _acc == want;
+                Invalidate(dockBreath && settled ? new Rectangle(0, 0, _sideW, Height) : ClientRectangle);
+            }
             else { _anim.Stop(); Native.timeEndPeriod(1); }
         }
 
@@ -533,23 +860,30 @@ namespace AgentHub
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.Clear(_shown >= 0 ? SideBg : Bg);
 
             bool boot = _shown < 0 && _mode < 0;   // 还没选模式：整屏只有动画和卡片，左右侧栏都不出现
-            if (!boot)
+            Rectangle full = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
+
+            if (boot)
             {
-                g.FillRectangle(_bSide, 0, 0, _sideW, Height);
-                g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
+                // 方案 D：深空开屏（星空 + 星芒 + 模式选择）
+                DrawStarfield(g, full);
+                DrawModeChooser(g);
+                return;
             }
 
+            // 非 boot：深空底 → 整层环境光 → 深空岩板 Dock → 光带
+            DrawStarfield(g, full);
+            DrawAmbient(g, full);
+            DrawRockSlab(g, 0, _sideW, Height);
+            DrawBeam(g);
+
             if (_shown < 0) DrawModeChooser(g);
-            if (boot) return;
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
                 Rectangle pr = ShownPillRect(_shown);
-                using (GraphicsPath p = Round(pr, Px(12)))
-                    g.FillPath(_bOrange, p);
+                DrawSelectedPill(g, pr, AppHue(_agents[_shown]));
             }
 
             if (_introT <= 0f) return;
@@ -569,6 +903,7 @@ namespace AgentHub
 
                 bool isShown = i == _shown;
                 bool isChosen = _chosen.Contains(i);
+                Color hue = AppHue(_agents[i]);
 
                 if (!isShown && i == _hover)
                 {
@@ -592,7 +927,7 @@ namespace AgentHub
                         cr = new Rectangle(cr.X + sh, cr.Y + sh, cr.Width - sh * 2, cr.Height - sh * 2);
                     }
                     using (GraphicsPath p = Round(cr, Px(12)))
-                    using (var pen = new Pen(Blend(SideBg, Orange, ap), Math.Max(1.6f, Px(2) * 0.9f)))
+                    using (var pen = new Pen(Blend(SideBg, hue, Math.Max(0.35f, ap)), Math.Max(1.6f, Px(2) * 0.9f)))
                         g.DrawPath(pen, p);
                 }
 
@@ -605,12 +940,28 @@ namespace AgentHub
                     Rectangle ir2 = new Rectangle(pr.X + Px(8), pr.Y + (pr.Height - isz) / 2, isz, isz);
                     Bitmap b2 = Icons.Get(_agents[i]);
                     if (b2 == null) b2 = Icons.Letter(_agents[i].Name, 40);
-                    if (b2 != null && pr.Width > Px(46)) g.DrawImage(b2, ir2);
+                    if (b2 != null && pr.Width > Px(46))
+                    {
+                        // 图标底光：应用色微晕
+                        int gr = Px(30);
+                        Rectangle grc = new Rectangle(ir2.X - (gr - ir2.Width) / 2, ir2.Y - (gr - ir2.Height) / 2, gr, gr);
+                        using (var path = new GraphicsPath())
+                        {
+                            path.AddEllipse(grc);
+                            using (var pgb = new PathGradientBrush(path))
+                            {
+                                pgb.CenterColor = Color.FromArgb(110, hue.R, hue.G, hue.B);
+                                pgb.SurroundColors = new Color[] { Color.FromArgb(0, hue.R, hue.G, hue.B) };
+                                g.FillEllipse(pgb, grc);
+                            }
+                        }
+                        g.DrawImage(b2, ir2);
+                    }
 
                     if (pr.Width > Px(46))
                     {
                         Rectangle tr = new Rectangle(pr.X + Px(30), pr.Y, pr.Width - Px(34), pr.Height);
-                        TextRenderer.DrawText(g, _agents[i].Name, _fName, tr, Bg,
+                        TextRenderer.DrawText(g, _agents[i].Name, _fName, tr, TextMain,
                             TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
                             TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
                     }
@@ -625,20 +976,18 @@ namespace AgentHub
                     {
                         int d = Px(18);
                         Rectangle rr = new Rectangle(ir.Right - d / 2 - Px(1), ir.Bottom - d / 2 - Px(1), d, d);
-                        g.DrawArc(_pRing, rr, 0, 360);
-                        g.DrawArc(_pOrange, rr, _spin, 100);
+                        using (var pRing2 = new Pen(Color.FromArgb(70, hue.R, hue.G, hue.B), Math.Max(1.6f, Px(2) * 0.8f)))
+                        using (var pOrange2 = new Pen(hue, Math.Max(1.6f, Px(2) * 0.9f)))
+                        {
+                            g.DrawArc(pRing2, rr, 0, 360);
+                            g.DrawArc(pOrange2, rr, _spin, 100);
+                        }
                     }
                 }
             }
 
             if (interactive && _agents.Count < 18) DrawPlus(g);
-            if (interactive)
-            {
-                DrawExit(g, ExitRect(), _hoverExit);
-                using (var f = new Font("微软雅黑", Px(15), FontStyle.Bold, GraphicsUnit.Pixel))
-                    TextRenderer.DrawText(g, "协", f, PipeEntryRect(), _mode == 1 ? Orange : TextFaint,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            }
+            if (interactive) DrawExit(g, ExitRect(), _hoverExit);
         }
 
         private int _mode = -1;   // -1 未选，0 普通工作站，1 多 agent 协同
@@ -1838,10 +2187,10 @@ namespace AgentHub
         {
             // 现在协同只有这一个中间态：选角色。选满三个立即 StartSynergy 进卡片流。
             using (var f0 = new Font("微软雅黑", Px(34), FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var b0 = new SolidBrush(TextBlack))
+            using (var b0 = new SolidBrush(TextMain))
                 g.DrawString("点侧栏选三个应用", f0, b0, _sideW + Px(80), Height * 0.18f);
             using (var f1 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var b1 = new SolidBrush(Color.FromArgb(120, 120, 128)))
+            using (var b1 = new SolidBrush(TextDim))
             {
                 g.DrawString("已选 " + _roles.Count + " / 3　·　第 1 个 = 需求拆解　第 2 个 = 任务执行　第 3 个 = 完成自检",
                     f1, b1, _sideW + Px(80), Height * 0.18f + Px(52));
@@ -1853,7 +2202,7 @@ namespace AgentHub
             {
                 if (_roles[k] < 0 || _roles[k] >= _agents.Count) continue;
                 using (var f2 = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
-                using (var b2 = new SolidBrush(Orange))
+                using (var b2 = new SolidBrush(AppHue(_agents[_roles[k]])))
                     g.DrawString((k + 1) + "  " + RoleNames[k] + " ← " + _agents[_roles[k]].Name, f2, b2, _sideW + Px(80), yy);
                 yy += Px(40);
             }
@@ -1861,13 +2210,10 @@ namespace AgentHub
 
         private void DrawModeChooser(Graphics g)
         {
-            g.Clear(Color.White);
-
             bool boot = _mode < 0;
             int left = boot ? 0 : _sideW;
-            if (!boot)
-                using (var b = new SolidBrush(SideBg))
-                    g.FillRectangle(b, 0, 0, _sideW, Height);
+
+            if (boot) DrawSparks(g, ClientRectangle);
 
             if (Width - left < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
             // 输入框的显隐跟协同状态走，避免离开协同模式后残留文本框
@@ -1887,7 +2233,7 @@ namespace AgentHub
                     using (var f = new Font("微软雅黑", Px(20), FontStyle.Regular, GraphicsUnit.Pixel))
                         TextRenderer.DrawText(g, "从左侧选择一个应用开始", f,
                             new Rectangle(left, 0, Width - left - (RightShown ? RightWPx : 0), Height),
-                            Color.FromArgb(165, 165, 172),
+                            TextDim,
                             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 return;
             }
@@ -1904,43 +2250,12 @@ namespace AgentHub
             float pCardA = Clamp01((T - 2.05f) / 0.45f);
             float pCardB = Clamp01((T - 2.12f) / 0.45f);
             float pCards = Math.Max(pCardA, pCardB);
-            float dark = 1f - Clamp01((T - 1.55f) / 0.55f);   // 深色开场，1.55s 后回落到浅色界面
 
             int pad0 = RightShown ? RightWPx : 0;
             int areaW = Width - left - pad0;
+            Color hue = _acc;
 
-            // ① 背景：浅色渐变打底，再叠深色；深色在 1.55s 后淡出
-            Rectangle full = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
-            if (_bgBmp == null || _bgSize != new Size(Width, Height))
-            {
-                if (_bgBmp != null) _bgBmp.Dispose();
-                _bgBmp = new Bitmap(Math.Max(1, Width), Math.Max(1, Height));
-                using (var bg = Graphics.FromImage(_bgBmp))
-                {
-                    using (var lgb = new LinearGradientBrush(full, Color.FromArgb(255, 255, 255), Color.FromArgb(242, 244, 248), LinearGradientMode.Vertical))
-                        bg.FillRectangle(lgb, full);
-                    using (var path0 = new GraphicsPath())
-                    {
-                        int gr0 = Px(1100);
-                        Rectangle g0 = new Rectangle(Width / 2 - gr0 / 2, (int)(Height * 0.30f) - gr0 / 2, gr0, gr0);
-                        path0.AddEllipse(g0);
-                        using (var pg0 = new PathGradientBrush(path0))
-                        {
-                            pg0.CenterColor = Color.FromArgb(58, 226, 235, 252);
-                            pg0.SurroundColors = new Color[] { Color.FromArgb(0, 226, 235, 252) };
-                            bg.FillEllipse(pg0, g0);
-                        }
-                    }
-                }
-                _bgSize = new Size(Width, Height);
-            }
-            g.DrawImage(_bgBmp, 0, 0);
-
-            if (dark > 0.002f)
-                using (var dv = new SolidBrush(Color.FromArgb((int)(255 * dark), 18, 18, 22)))
-                    g.FillRectangle(dv, full);
-
-            // ② 中心径向光晕 + 细线 + 汇聚光点
+            // ① 中心径向光晕（应用色）+ 细线 + 汇聚光点
             int logoSize = Px(150);
             int logoX = left + (areaW - logoSize) / 2;
             int logoY = (int)(Height * 0.10f + (1f - EaseOut(pIcon)) * Px(18));
@@ -1956,8 +2271,8 @@ namespace AgentHub
                     path.AddEllipse(grc);
                     using (var pgb = new PathGradientBrush(path))
                     {
-                        int ga = (int)(80 * pBg * (0.30f + 0.70f * dark));
-                        pgb.CenterColor = Color.FromArgb(Math.Max(0, Math.Min(255, ga)), 255, 150, 64);
+                        int ga = (int)(80 * pBg);
+                        pgb.CenterColor = Color.FromArgb(Math.Max(0, Math.Min(255, ga)), hue.R, hue.G, hue.B);
                         pgb.SurroundColors = new Color[] { Color.FromArgb(0, 255, 150, 64) };
                         g.FillEllipse(pgb, grc);
                     }
@@ -1965,7 +2280,7 @@ namespace AgentHub
             }
 
             if (pLines > 0.01f)
-                using (var pen = new Pen(Color.FromArgb((int)(70 * pLines), 255, 186, 120), Px(1)))
+                using (var pen = new Pen(Color.FromArgb((int)(70 * pLines), hue.R, hue.G, hue.B), Px(1)))
                     for (int i = 0; i < 6; i++)
                     {
                         double ang = i * Math.PI / 3.0 + 0.26;
@@ -1985,7 +2300,7 @@ namespace AgentHub
                     int dx = (int)(Math.Cos(ang) * r);
                     int dy = (int)(Math.Sin(ang) * r * 0.74);
                     int a2 = (int)(170 * al);
-                    using (var br = new SolidBrush(Color.FromArgb(Math.Max(0, Math.Min(255, a2)), 255, 196, 132)))
+                    using (var br = new SolidBrush(Color.FromArgb(Math.Max(0, Math.Min(255, a2)), hue.R, hue.G, hue.B)))
                         g.FillEllipse(br, cx + dx - Px(3), cy + dy - Px(3), Px(6), Px(6));
                 }
             }
@@ -2012,7 +2327,7 @@ namespace AgentHub
                 {
                     int rr = (int)(logoSize * 0.62f + logoSize * 0.55f * EaseOut(pRing));
                     int ra = (int)(110 * (1f - pRing));
-                    using (var pen = new Pen(Color.FromArgb(Math.Max(0, Math.Min(255, ra)), 255, 172, 88), Px(2)))
+                    using (var pen = new Pen(Color.FromArgb(Math.Max(0, Math.Min(255, ra)), hue.R, hue.G, hue.B), Px(2)))
                         g.DrawEllipse(pen, cx - rr, cy - rr, rr * 2, rr * 2);
                 }
             }
@@ -2020,7 +2335,7 @@ namespace AgentHub
             // ④ 品牌名 + 副标题（沿用 README 的定位语，不新编宣传语）
             if (pBrand > 0.02f)
             {
-                Color brandCol = LerpColor(Color.FromArgb(248, 248, 250), Color.FromArgb(22, 22, 26), 1f - dark);
+                Color brandCol = Color.FromArgb(240, 240, 246);
                 int rise = (int)((1f - EaseOut(pBrand)) * Px(10));
                 using (var f = new Font("Segoe UI", Px(44), FontStyle.Bold, GraphicsUnit.Pixel))
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center })
@@ -2028,7 +2343,7 @@ namespace AgentHub
                     g.DrawString("AgentHub", f, br,
                         new RectangleF(left, Height * 0.238f + rise, areaW, Px(58)), sf);
 
-                Color subCol = LerpColor(Color.FromArgb(170, 172, 182), Color.FromArgb(120, 120, 130), 1f - dark);
+                Color subCol = Color.FromArgb(150, 150, 160);
                 using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
                 using (var sf2 = new StringFormat { Alignment = StringAlignment.Center })
                 using (var br2 = new SolidBrush(Color.FromArgb((int)(255 * pBrand), subCol)))
@@ -2042,8 +2357,7 @@ namespace AgentHub
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
                 var r = new RectangleF(left, Height * 0.335f + (1f - EaseOut(pMode)) * Px(12), areaW, Px(76));
-                Color tc = LerpColor(Color.FromArgb(248, 248, 250), Color.FromArgb(20, 20, 24), 1f - dark);
-                using (var tb = new SolidBrush(Color.FromArgb((int)(255 * pMode), tc)))
+                using (var tb = new SolidBrush(Color.FromArgb((int)(255 * pMode), 232, 232, 240)))
                     g.DrawString("选择你的工作模式", f, tb, r, sf);
             }
             if (pCards <= 0.02f) return;
@@ -2121,22 +2435,24 @@ namespace AgentHub
         {
             using (GraphicsPath p = Round(r, Px(18)))
             {
-                using (var pen = new Pen(selected ? Orange : Color.FromArgb(224, 224, 228), selected ? 2.4f : 1.2f))
+                using (var fb = new SolidBrush(Color.FromArgb(18, 18, 24)))
+                    g.FillPath(fb, p);
+                using (var pen = new Pen(selected ? _acc : Color.FromArgb(39, 39, 47), selected ? 2.4f : 1.2f))
                     g.DrawPath(pen, p);
             }
 
             using (var f = new Font("微软雅黑", Px(26), FontStyle.Bold, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, title, f, new Rectangle(r.X + Px(24), r.Y + Px(28), r.Width - Px(48), Px(40)),
-                    TextBlack, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    TextMain, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
             using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, sub, f, new Rectangle(r.X + Px(24), r.Y + Px(74), r.Width - Px(48), Px(30)),
-                    Color.FromArgb(120, 120, 128), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    TextDim, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
             using (var f = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, selected ? "已选择" : "点这里进入", f,
                     new Rectangle(r.X + Px(24), r.Bottom - Px(46), r.Width - Px(48), Px(26)),
-                    selected ? Orange : Color.FromArgb(168, 168, 176), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    selected ? _acc : TextFaint, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
         private void DrawTile(Graphics g, Agent a, Rectangle r)
@@ -2147,10 +2463,48 @@ namespace AgentHub
             if (bmp == null) bmp = Icons.Letter(a.Name, 48);
             if (bmp == null) return;
 
+            int idx = AgentIndex(a.Id);
+            bool isChosen = idx >= 0 && _chosen.Contains(idx);
+            Color hue = AppHue(a);
+
+            // 凹槽井：未选中图标嵌入井中（顶暗底亮的内阴影）
+            Rectangle wr = new Rectangle(ir.X - Px(5), ir.Y - Px(5), ir.Width + Px(10), ir.Height + Px(10));
+            using (GraphicsPath p = Round(wr, Px(11)))
+            {
+                using (var b = new SolidBrush(Color.FromArgb(10, 11, 15)))
+                    g.FillPath(b, p);
+                var clip = g.Save();
+                g.SetClip(p);
+                using (var lg = new LinearGradientBrush(new Rectangle(wr.X, wr.Y, wr.Width, Math.Max(2, wr.Height / 2)),
+                    Color.FromArgb(50, 0, 0, 0), Color.Transparent, LinearGradientMode.Vertical))
+                    g.FillRectangle(lg, wr);
+                using (var lg = new LinearGradientBrush(new Rectangle(wr.X, wr.Bottom - Math.Max(2, wr.Height / 2), wr.Width, Math.Max(2, wr.Height / 2)),
+                    Color.Transparent, Color.FromArgb(14, 255, 255, 255), LinearGradientMode.Vertical))
+                    g.FillRectangle(lg, wr);
+                g.Restore(clip);
+            }
+
+            // 已选：井内被该应用的光微微点亮
+            if (isChosen)
+            {
+                int gr = Math.Max(Px(46), wr.Width + Px(14));
+                Rectangle grc = new Rectangle(wr.X - (gr - wr.Width) / 2, wr.Y - (gr - wr.Height) / 2, gr, gr);
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(grc);
+                    using (var pgb = new PathGradientBrush(path))
+                    {
+                        pgb.CenterColor = Color.FromArgb((int)(38 * AmbientAlpha()), hue.R, hue.G, hue.B);
+                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, hue.R, hue.G, hue.B) };
+                        g.FillEllipse(pgb, grc);
+                    }
+                }
+            }
+
             if (Icons.IsDark(bmp, a.Id))
             {
                 using (GraphicsPath p = Round(new Rectangle(ir.X - 2, ir.Y - 2, ir.Width + 4, ir.Height + 4), Px(9)))
-                using (var b = new SolidBrush(Color.FromArgb(40, 40, 48)))
+                using (var b = new SolidBrush(Color.FromArgb(44, 44, 54)))
                     g.FillPath(b, p);
             }
 
@@ -2158,6 +2512,16 @@ namespace AgentHub
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.DrawImage(bmp, ir);
             g.InterpolationMode = old;
+
+            // 运行光点：呼吸（显示中的应用由亮面胶囊表达，不再画点）
+            if (isChosen && idx != _shown)
+            {
+                float ph = _reduceMotion ? 0.75f : (float)(Math.Sin(_breath) * 0.5 + 0.5);
+                int d = Px(7);
+                Rectangle dr = new Rectangle(wr.Right - d / 2 - Px(1), wr.Bottom - d / 2 - Px(1), d, d);
+                using (var b = new SolidBrush(Color.FromArgb((int)(60 + 160 * ph), hue.R, hue.G, hue.B)))
+                    g.FillEllipse(b, dr);
+            }
         }
 
         private Rectangle PlusRect()
@@ -2176,13 +2540,13 @@ namespace AgentHub
         {
             Rectangle r = PlusRect();
             bool hot = _plusHot;
-            using (var pen = new Pen(hot ? Orange : Color.FromArgb(52, 52, 60), Math.Max(1.2f, Px(2) * 0.7f)))
+            using (var pen = new Pen(hot ? _acc : Color.FromArgb(56, 56, 68), Math.Max(1.2f, Px(2) * 0.7f)))
             {
                 pen.DashStyle = DashStyle.Dash;
                 using (GraphicsPath p = Round(r, Px(12)))
                     g.DrawPath(pen, p);
             }
-            using (var pen = new Pen(hot ? Orange : TextFaint, Math.Max(1.6f, Px(2) * 0.9f)))
+            using (var pen = new Pen(hot ? _acc : TextFaint, Math.Max(1.6f, Px(2) * 0.9f)))
             {
                 pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
                 int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, a = Px(7);
@@ -2194,7 +2558,7 @@ namespace AgentHub
         private void DrawExit(Graphics g, Rectangle r, bool hot)
         {
             int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, a = Px(6);
-            using (var pen = new Pen(hot ? Orange : TextFaint, Math.Max(1.4f, Px(2) * 0.8f)))
+            using (var pen = new Pen(hot ? _acc : TextFaint, Math.Max(1.4f, Px(2) * 0.8f)))
             {
                 pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
                 g.DrawArc(pen, cx - a, cy - a, a * 2, a * 2, -60, 300);
@@ -3127,6 +3491,8 @@ namespace AgentHub
                 if (_pLine != null) _pLine.Dispose();
                 if (_pOrange != null) _pOrange.Dispose();
                 if (_pRing != null) _pRing.Dispose();
+                if (_starBmp != null) { _starBmp.Dispose(); _starBmp = null; }
+                if (_noiseBmp != null) { _noiseBmp.Dispose(); _noiseBmp = null; }
                 _poll.Dispose(); _health.Dispose(); _anim.Dispose();
                 _hideTimer.Dispose(); _restoreTimer.Dispose();
             }
