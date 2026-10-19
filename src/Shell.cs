@@ -620,7 +620,8 @@ namespace AgentHub
                 if (_dialogs[k] != null && !_dialogs[k].IsDisposed) _dialogs[k].Close();
         }
 
-        private Rectangle PipeEntryRect() { return new Rectangle(ItemXPx, Height - Px(196), ItemSizePx, ItemSizePx); }
+        // 协同入口已由「切换模式」取代，这里返回空矩形：不绘制、也不响应点击
+        private Rectangle PipeEntryRect() { return Rectangle.Empty; }
 
         // ---------- 纵向卡片流水线 ----------
 

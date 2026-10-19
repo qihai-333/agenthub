@@ -423,6 +423,11 @@ namespace AgentHub
         public static int KillOwned(int graceMs)
         {
             List<int> pids = OwnedPids();
+            foreach (int p in pids)
+            {
+                try { using (Process pp = Process.GetProcessById(p)) Program.Log("exit owned pid=" + p + " " + pp.ProcessName); }
+                catch { Program.Log("exit owned pid=" + p + " (已退出)"); }
+            }
             foreach (int pid in pids)
             {
                 try { using (Process p = Process.GetProcessById(pid)) p.CloseMainWindow(); }
