@@ -185,11 +185,11 @@ namespace AgentHub
         }
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
-        private int SideExpandedPx { get { return Px(92); } }
-        private int ItemSizePx { get { return Px(52); } }
-        private int ItemStepPx { get { return Px(64); } }
-        private int ItemTopPx { get { return Px(30); } }
-        private int ItemXPx { get { return Px(20); } }
+        private int SideExpandedPx { get { return Px(116); } }
+        private int ItemSizePx { get { return Px(96); } }
+        private int ItemStepPx { get { return Px(112); } }
+        private int ItemTopPx { get { return Px(56); } }
+        private int ItemXPx { get { return Px(10); } }
 
         public IntPtr ActiveHandle
         {
@@ -1795,7 +1795,7 @@ namespace AgentHub
 
         private void DrawTile(Graphics g, Agent a, Rectangle r)
         {
-            int sz = Px(40);
+            int sz = Px(80);
             Rectangle ir = new Rectangle(r.X + (r.Width - sz) / 2, r.Y + (r.Height - sz) / 2, sz, sz);
             Bitmap bmp = Icons.Get(a);
             if (bmp == null) bmp = Icons.Letter(a.Name, 48);
