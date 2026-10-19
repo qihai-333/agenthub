@@ -681,10 +681,13 @@ namespace AgentHub
         {
             Point cp = PointToClient(Cursor.Position);
             Control c = GetChildAtPoint(cp, GetChildAtPointSkip.Invisible);
+            // 逐层往下钻：GetChildAtPoint 只看直接子控件，SynergyPanel 这种容器里才是输入框
             while (c != null)
             {
                 if (c is TextBoxBase) return true;
-                c = c.Parent;
+                Control inner = c.GetChildAtPoint(c.PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible);
+                if (inner == null || inner == c) break;
+                c = inner;
             }
             return _taskBox != null && _taskBox.Visible && _taskBox.Bounds.Contains(cp);
         }
@@ -2220,6 +2223,7 @@ namespace AgentHub
             {
                 // 点在可输入控件上时必须允许窗口激活，否则输入法无法附着、无法候选上屏
                 bool onInput = OnInputAtCursor();
+                Program.Log("mouseactivate onInput=" + onInput + " ctl=" + (GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible) != null ? GetChildAtPoint(PointToClient(Cursor.Position), GetChildAtPointSkip.Invisible).GetType().Name : "null"));
                 if (onInput) Native.SetNoActivate(Handle, false);   // 必须摘掉 NOACTIVATE，否则输入法附着不上
                 m.Result = (IntPtr)(onInput ? 1 : Native.MA_NOACTIVATE);
                 return;
