@@ -203,12 +203,33 @@ namespace AgentHub
         {
             ExitSynergy();
             _mode = -1;
+            UpdateRightDock();
             _enterT = 0f;
             Kick();          // 必须重启动画定时器：否则入场进度停在 0，绘制直接 return，表现为白屏
             Invalidate();
         }
 
-        private bool RightShown { get { return _mode == 0 && _shown < 0; } }
+        // 右侧栏现在是独立小窗（RightDock），这里只表示"要不要给它留位置"
+        private bool RightShown { get { return _rightDock != null && _rightDock.Visible; } }
+        private RightDock _rightDock;
+
+        public string ModeTitle() { return _mode == 1 ? "多 agent 协同" : "普通工作站"; }
+        public int AgentCount { get { return _agents.Count; } }
+        public void DockAddProcess() { ShowAdd(); }
+
+        private void UpdateRightDock()
+        {
+            bool want = _mode == 0;
+            if (want)
+            {
+                if (_rightDock == null) { _rightDock = new RightDock(this); }
+                _rightDock.AttachToScreen(RightWPx);
+                if (!_rightDock.Visible) _rightDock.Show();
+                _rightDock.Invalidate();
+            }
+            else if (_rightDock != null && _rightDock.Visible) _rightDock.Hide();
+            Invalidate();
+        }
         private Rectangle RightPanelRect() { return new Rectangle(Width - RightWPx, 0, RightWPx, Height); }
         private Rectangle AddProcRect() { return new Rectangle(Width - RightWPx + Px(20), Px(150), RightWPx - Px(40), Px(64)); }
         private Rectangle SwitchModeRect() { return new Rectangle(Width - RightWPx + Px(20), Px(240), RightWPx - Px(40), Px(52)); }
@@ -240,7 +261,8 @@ namespace AgentHub
         private Rectangle ContentRect()
         {
             Rectangle scr = Screen.PrimaryScreen.WorkingArea;
-            return new Rectangle(scr.X + _sideW, scr.Y, Math.Max(1, scr.Width - _sideW), scr.Height);
+            int pad = RightShown ? RightWPx : 0;   // 给右侧栏让位，应用不钻到它下面
+            return new Rectangle(scr.X + _sideW, scr.Y, Math.Max(1, scr.Width - _sideW - pad), scr.Height);
         }
 
         // ---------- 动效 ----------
@@ -452,7 +474,6 @@ namespace AgentHub
 
             if (_shown < 0) DrawModeChooser(g);
             if (boot) return;
-            if (RightShown) DrawRightPanel(g);
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
@@ -2084,8 +2105,8 @@ namespace AgentHub
             {
                 Rectangle ca, cb;
                 CardRects(out ca, out cb);
-                if (ca.Contains(e.Location)) { ShowPipelineView(); return; }
-                if (cb.Contains(e.Location)) { _mode = 0; Invalidate(); return; }   // 普通工作站：只负责选中，应用由侧栏点
+                if (ca.Contains(e.Location)) { _mode = 1; UpdateRightDock(); ShowPipelineView(); return; }
+                if (cb.Contains(e.Location)) { _mode = 0; UpdateRightDock(); Invalidate(); return; }   // 普通工作站：只负责选中，应用由侧栏点
 
                 // 协同：输入阶段（卡 1 是任务输入框）
                 bool inputPhase = _mode == 1 && _tiled && !_picking && (_pipe == null || _pipe.Phase == PipePhase.Idle);
