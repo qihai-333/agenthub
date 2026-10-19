@@ -34,6 +34,29 @@ if errorlevel 1 (
 
 echo.
 echo [ok] Built: %ROOT%bin\AgentHub.exe
+
+rem ================= install to %USERPROFILE%\AgentHub =================
+rem Without this step the desktop shortcut keeps launching the previous build.
+
+set "INSTALL=%AGENTHUB_HOME%"
+if "%INSTALL%"=="" set "INSTALL=%USERPROFILE%\AgentHub"
+
+if not exist "%INSTALL%" mkdir "%INSTALL%"
+
+taskkill /IM AgentHub.exe /F >nul 2>&1
+
+copy /Y "%ROOT%bin\AgentHub.exe" "%INSTALL%\AgentHub.exe" >nul
+if exist "%ROOT%brand\logo.png" copy /Y "%ROOT%brand\logo.png" "%INSTALL%\logo.png" >nul
+if exist "%ROOT%agents.example.json" if not exist "%INSTALL%\agents.json" copy /Y "%ROOT%agents.example.json" "%INSTALL%\agents.json" >nul
+
+if errorlevel 1 (
+    echo [x] Install copy failed. Set AGENTHUB_HOME to the target folder and retry.
+    pause
+    exit /b 1
+)
+
+echo [ok] Installed: %INSTALL%\AgentHub.exe
+
 echo.
 echo      First run: empty sidebar. Click "+" at the bottom to add your apps.
 echo.
