@@ -25,3 +25,6 @@ shots/
 
 # 打包产物
 dist/
+
+# 本地备份
+src/_backup*/
