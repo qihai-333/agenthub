@@ -640,8 +640,7 @@ namespace AgentHub
                 var psi = new ProcessStartInfo("taskkill.exe", "/PID " + pid + " /T /F");
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
-                Process pr = Process.Start(psi);
-            if (pr != null) Register(pr.Id, true);   // 记下来：这个是我们启动的
+                Process.Start(psi);
                 Program.Log("kill tree pid=" + pid);
             }
             catch (Exception ex)
