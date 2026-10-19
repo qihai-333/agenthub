@@ -1,14 +1,16 @@
 @echo off
 setlocal
-chcp 65001 >nul
+
+rem Build AGENT HUB with the .NET Framework 4 compiler that ships with Windows 10/11.
+rem This file is ASCII-only with CRLF endings on purpose: cmd misparses UTF-8 text + chcp.
 
 set "ROOT=%~dp0"
 set "FW=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319"
 if not exist "%FW%\csc.exe" set "FW=%WINDIR%\Microsoft.NET\Framework\v4.0.30319"
 
 if not exist "%FW%\csc.exe" (
-    echo [x] 找不到 .NET Framework 4 的编译器。
-    echo     Windows 10 / 11 自带，如果你在精简系统上，请装 .NET Framework 4.8。
+    echo [x] .NET Framework 4 compiler not found.
+    echo     Install .NET Framework 4.8 and try again.
     pause
     exit /b 1
 )
@@ -25,14 +27,14 @@ if not exist "%ROOT%bin" mkdir "%ROOT%bin"
 
 if errorlevel 1 (
     echo.
-    echo [x] 编译失败，把上面的报错发给我。
+    echo [x] BUILD FAILED - send the errors above for a fix.
     pause
     exit /b 1
 )
 
 echo.
-echo [ok] 生成好了：%ROOT%bin\AgentHub.exe
+echo [ok] Built: %ROOT%bin\AgentHub.exe
 echo.
-echo      第一次运行会是一块黑底加一条空侧栏，点侧栏底部的「+」添加你的应用。
+echo      First run: empty sidebar. Click "+" at the bottom to add your apps.
 echo.
 pause

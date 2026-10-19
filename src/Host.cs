@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -33,9 +32,10 @@ namespace AgentHub
         {
             get
             {
-                string d = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
-                if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-                return d;
+                // 数据目录跟着实例走：默认实例 data\，--config 实例 data-<配置名>\（见 Program.SetDataDir）
+                try { if (!Directory.Exists(Program.DataDir)) Directory.CreateDirectory(Program.DataDir); }
+                catch { }
+                return Program.DataDir;
             }
         }
 
@@ -149,12 +149,6 @@ namespace AgentHub
             return sb.ToString();
         }
 
-        public static bool PlainMode(IntPtr hwnd)
-        {
-            Takeover t;
-            return Map.TryGetValue(hwnd, out t) && t.PlainFallback;
-        }
-
         public class WindowInfo
         {
             public IntPtr Hwnd;
@@ -214,6 +208,36 @@ namespace AgentHub
         public static bool IsRunning(Agent a)
         {
             return PidsOf(a).Count > 0;
+        }
+
+        // 标题兜底匹配的防误接管检查：标题里含「豆包」的浏览器标签页不该被当成豆包接走。
+        // 进程路径可读时，要求它与配置里的 exe 同目录，或两者文件名互为包含（launcher 场景，
+        // 如 "Qoder CN Launcher" 启动的真正窗口是 "Qoder CN"）。读不到路径就放行。
+        private static bool PathPlausible(IntPtr h, Agent a)
+        {
+            if (string.IsNullOrEmpty(a.Exe)) return true;
+            if (a.Exe.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                a.Exe.EndsWith(".url", StringComparison.OrdinalIgnoreCase)) return true;
+            if (!File.Exists(a.Exe)) return true;   // 配置路径本机不存在，无从比起
+
+            uint pid;
+            Native.GetWindowThreadProcessId(h, out pid);
+            string procPath = null;
+            try { using (Process p = Process.GetProcessById((int)pid)) procPath = p.MainModule.FileName; }
+            catch { return true; }
+            if (string.IsNullOrEmpty(procPath)) return true;
+
+            string d1 = Path.GetDirectoryName(a.Exe);
+            string d2 = Path.GetDirectoryName(procPath);
+            if (string.Equals(d1, d2, StringComparison.OrdinalIgnoreCase)) return true;
+
+            string n1 = Path.GetFileNameWithoutExtension(a.Exe);
+            string n2 = Path.GetFileNameWithoutExtension(procPath);
+            if (n1.IndexOf(n2, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n2.IndexOf(n1, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            Program.Log("find: title match rejected, proc=" + procPath + " want=" + a.Exe);
+            return false;
         }
 
         public static IntPtr Find(Agent a, DateTime since)
@@ -300,12 +324,74 @@ namespace AgentHub
                     if (!Native.GetWindowRect(h, out r)) return true;
                     long area = (long)r.Width * r.Height;
                     if (area < 120 * 120) return true;
+                    if (!PathPlausible(h, a)) return true;
                     if (area > bestArea) { bestArea = area; best = h; }
                     return true;
                 };
                 Native.EnumWindows(cb2, IntPtr.Zero);
             }
 
+            return best;
+        }
+
+        // 协同平铺用的找窗：DWM 缩略图注册哪个句柄三栏就显示哪个，
+        // 绝不能落到不可见后备窗口上（那正是"抓到的不是屏幕上那个窗口"的根源）。
+        // 先找可见窗口；没有就返回 0，让调用方稍后重试。
+        public static IntPtr FindVisible(Agent a, DateTime since)
+        {
+            var pids = PidsOf(a);
+            if (pids.Count == 0) return IntPtr.Zero;
+
+            IntPtr best = IntPtr.Zero;
+            long bestArea = 0;
+            Native.EnumWindowsProc cb = delegate(IntPtr h, IntPtr lp)
+            {
+                uint pid;
+                Native.GetWindowThreadProcessId(h, out pid);
+                if (!pids.Contains((int)pid)) return true;
+                if (!Native.IsWindowVisible(h)) return true;
+                if (Native.GetWindowTextLength(h) == 0) return true;
+                if ((Native.GetWindowLong(h, Native.GWL_EXSTYLE) & Native.WS_EX_TOOLWINDOW) != 0) return true;
+                if (Native.GetWindow(h, Native.GW_OWNER) != IntPtr.Zero) return true;
+
+                string cls = Native.ClassName(h);
+                if (cls == "Windows.UI.Core.CoreWindow") return true;
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(h, out r)) return true;
+                long area = (long)r.Width * r.Height;
+                if (area < 120 * 120) return true;
+
+                if (area > bestArea) { bestArea = area; best = h; }
+                return true;
+            };
+            Native.EnumWindows(cb, IntPtr.Zero);
+
+            if (best == IntPtr.Zero && !string.IsNullOrEmpty(a.Title) && !a.IsUrl)
+            {
+                int selfPid = Process.GetCurrentProcess().Id;
+                Native.EnumWindowsProc cb2 = delegate(IntPtr h, IntPtr lp)
+                {
+                    if (!Native.IsWindowVisible(h)) return true;
+                    uint pid;
+                    Native.GetWindowThreadProcessId(h, out pid);
+                    if ((int)pid == selfPid) return true;
+                    string t = Native.Title(h);
+                    if (t.Length == 0) return true;
+                    if (t.IndexOf(a.Title, StringComparison.OrdinalIgnoreCase) < 0) return true;
+                    if (t.IndexOf("AGENT HUB", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    string cls = Native.ClassName(h);
+                    if (cls == "Progman" || cls == "Shell_TrayWnd" || cls == "ApplicationFrameWindow") return true;
+                    Native.RECT r;
+                    if (!Native.GetWindowRect(h, out r)) return true;
+                    long area = (long)r.Width * r.Height;
+                    if (area < 120 * 120) return true;
+                    if (!PathPlausible(h, a)) return true;
+                    if (area > bestArea) { bestArea = area; best = h; }
+                    return true;
+                };
+                Native.EnumWindows(cb2, IntPtr.Zero);
+            }
             return best;
         }
 
@@ -368,22 +454,6 @@ namespace AgentHub
             psi.UseShellExecute = false;
             psi.Arguments = "--app=" + a.Url + " --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check --window-size=1400,900";
             Process.Start(psi);
-        }
-
-        public static bool PortOpen(string host, int port)
-        {
-            try
-            {
-                using (var c = new TcpClient())
-                {
-                    var ar = c.BeginConnect(host, port, null, null);
-                    bool ok = ar.AsyncWaitHandle.WaitOne(300);
-                    if (!ok) return false;
-                    c.EndConnect(ar);
-                    return true;
-                }
-            }
-            catch { return false; }
         }
 
         public static bool Apply(IntPtr hwnd, IntPtr shell, Rectangle rect, bool offsetFrame)
@@ -618,7 +688,12 @@ namespace AgentHub
         public static bool LooksElevated(int pid)
         {
             IntPtr p = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if (p == IntPtr.Zero) return true;
+            if (p == IntPtr.Zero)
+            {
+                // 打不开不等于提权：进程可能刚退出（ERROR_INVALID_PARAMETER）。
+                // 只有 ERROR_ACCESS_DENIED 才说明目标完整性级别比我们高。
+                return Marshal.GetLastWin32Error() == 5;
+            }
             Native.CloseHandle(p);
             return false;
         }
@@ -631,8 +706,7 @@ namespace AgentHub
             try
             {
                 h = Native.GetCurrentProcess();
-                uint dummy;
-                if (!Native.OpenProcessToken(h, 0x0008, out tok)) return -1;
+                if (!Native.OpenProcessToken(h, 0x0008, out tok)) return -1;   // 0x0008 = TOKEN_QUERY
                 buf = Marshal.AllocHGlobal(64);
                 int ret;
                 if (!Native.GetTokenInformation(tok, 25, buf, 64, out ret)) return -1;
@@ -656,20 +730,6 @@ namespace AgentHub
                 var id = System.Security.Principal.WindowsIdentity.GetCurrent();
                 var pr = new System.Security.Principal.WindowsPrincipal(id);
                 return pr.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-            }
-            catch { return false; }
-        }
-
-        public static bool RestartElevated()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo();
-                psi.FileName = Application.ExecutablePath;
-                psi.UseShellExecute = true;
-                psi.Verb = "runas";
-                Process.Start(psi);
-                return true;
             }
             catch { return false; }
         }

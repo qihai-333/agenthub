@@ -11,15 +11,44 @@ namespace AgentHub
 {
     internal static class Program
     {
-        internal static readonly string LogPath =
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "app.log");
+        // 运行期数据目录：默认实例在 exe 旁的 data\；
+        // 带 --config 的实例在 data-<配置名>\，多个实例互不覆盖会话、journal 和日志
+        internal static string DataDir =
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
+
+        internal static string LogPath
+        {
+            get { return Path.Combine(DataDir, "app.log"); }
+        }
 
         internal static void Log(string s)
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(LogPath));
+                Directory.CreateDirectory(DataDir);
                 File.AppendAllText(LogPath, DateTime.Now.ToString("HH:mm:ss.fff ") + s + "\r\n", Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        // 实例标识：默认 "default"；带 --config 时取配置文件名，用于 mutex 与数据目录
+        internal static string ConfigTag(string[] args)
+        {
+            if (args != null)
+                for (int i = 0; i < args.Length - 1; i++)
+                    if (args[i] == "--config") return Path.GetFileNameWithoutExtension(args[i + 1]);
+            return "default";
+        }
+
+        private static void SetDataDir(string[] args)
+        {
+            string tag = ConfigTag(args);
+            if (tag == "default") return;
+            try
+            {
+                string d = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data-" + tag);
+                Directory.CreateDirectory(d);
+                DataDir = d;
             }
             catch { }
         }
@@ -27,6 +56,7 @@ namespace AgentHub
         [STAThread]
         private static void Main(string[] args)
         {
+            SetDataDir(args);
             Log("---- start ----");
             try
             {
@@ -43,7 +73,7 @@ namespace AgentHub
 
         private static void Run(string[] args)
         {
-            if (args != null && args.Length > 0 && args[0] == "--restore")
+            if (args != null && Array.IndexOf(args, "--restore") >= 0)
             {
                 int n = Host.RestoreStale();
                 MessageBox.Show("已还原 " + n + " 个被接管的窗口。", "AGENT HUB", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -53,8 +83,8 @@ namespace AgentHub
             if (args != null && Array.IndexOf(args, "--doctor") >= 0)
             {
                 string rep = Host.DoctorReport(Config.Load(null));
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "doctor.txt");
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                string path = Path.Combine(DataDir, "doctor.txt");
+                Directory.CreateDirectory(DataDir);
                 File.WriteAllText(path, rep, Encoding.UTF8);
                 Log("doctor -> " + path);
                 try { Process.Start("notepad.exe", "\"" + path + "\""); } catch { }
@@ -88,14 +118,7 @@ namespace AgentHub
             }
 
             bool created;
-            string tag = "default";
-            if (args != null)
-            {
-                for (int i = 0; i < args.Length - 1; i++)
-                {
-                    if (args[i] == "--config") tag = Path.GetFileNameWithoutExtension(args[i + 1]);
-                }
-            }
+            string tag = ConfigTag(args);
             using (var mutex = new Mutex(true, "Local\\AgentHub." + tag, out created))
             {
                 if (!created) return;

@@ -21,8 +21,6 @@ namespace AgentHub
         private readonly Dictionary<string, Color> _color = new Dictionary<string, Color>();
         private readonly Bitmap _logo;
 
-        public bool ClosedByUser { get; private set; }
-
         public Splash(List<Agent> items, Bitmap logo)
         {
             _logo = logo;
@@ -53,7 +51,7 @@ namespace AgentHub
             close.TextAlign = ContentAlignment.MiddleCenter;
             close.SetBounds(ClientSize.Width - 34, 8, 26, 26);
             close.Cursor = Cursors.Hand;
-            close.Click += delegate { ClosedByUser = true; Close(); };
+            close.Click += delegate { Close(); };
             Controls.Add(close);
         }
 
@@ -107,7 +105,7 @@ namespace AgentHub
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == Keys.Escape) { ClosedByUser = true; Close(); return true; }
+            if (keyData == Keys.Escape) { Close(); return true; }
             return base.ProcessCmdKey(ref msg, keyData);
         }
     }

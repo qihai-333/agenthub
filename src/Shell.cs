@@ -11,6 +11,7 @@ namespace AgentHub
     public class Shell : Form
     {
         private const int MaxSlots = 3;
+        private const int HotStripPx = 3;   // 侧栏滑出后留在屏幕左缘的热区宽度
         private const int HotkeyBase = 100;
         private const int HotkeyToggle = 200;
 
@@ -28,7 +29,6 @@ namespace AgentHub
         private readonly float _s;
 
         private int _sideW;
-        private bool _expanded = true;
 
         private readonly HashSet<int> _chosen = new HashSet<int>();
         private int _shown = -1;
@@ -37,9 +37,7 @@ namespace AgentHub
         private readonly Dictionary<int, int> _dead = new Dictionary<int, int>();
 
         private int _hover = -1;
-        private bool _hoverCollapse;
         private bool _hoverExit;
-        private bool _hoverStrip;
         private bool _plusHot;
 
         private int _pendingIdx = -1;
@@ -54,20 +52,25 @@ namespace AgentHub
         private float _hoverT = 1f;
         private float _pressT;
         private int _pressIdx = -1;
-        private float _collapseT = 1f;
-        private bool _collapseMoving;
         private float _expandT = 1f;
         private float _spin;
 
-        // 侧栏滑出/滑入：0 = 完全可见，1 = 完全滑出（只留 3px 热区）
-        private bool _dockHidden;
-        private float _slideT;
-        private DateTime _hideDue = DateTime.MaxValue;
+        // 侧栏状态机：以前是 _hiddenToTray / _dockHidden / _slideT 三个变量互相协作，
+        // 小 bug 全出在它们打架上。现在收敛成一个枚举，_slideT 只负责动画进度。
+        //   Visible    —— 侧栏在屏幕上，正常交互
+        //   Hidden     —— 滑到屏幕左缘外，只留 3px 热区（电源键/任务栏键触发）
+        //   Background —— Hidden 且已选应用也被隐藏，进程继续跑，靠托盘唤回
+        private enum DockState { Visible, Hidden, Background }
+
+        private DockState _dock = DockState.Visible;
+        private float _slideT;   // 0 = 完全可见，1 = 完全滑出；目标值由 _dock 决定
         private readonly Timer _hideTimer = new Timer();
+
+        private bool DockGone { get { return _dock != DockState.Visible; } }
+        private bool DockInBackground { get { return _dock == DockState.Background; } }
 
         // 关到后台：窗口滑出、应用隐藏、进程继续，靠托盘或左边缘叫回来
         private NotifyIcon _tray;
-        private bool _hiddenToTray;
         private bool _reallyExit;
 
         private readonly List<string> _restore = new List<string>();
@@ -79,14 +82,12 @@ namespace AgentHub
         private readonly Dictionary<string, float> _y = new Dictionary<string, float>();
         private readonly Dictionary<string, float> _delay = new Dictionary<string, float>();
 
-        private readonly Font _fIcon;
         private readonly Font _fName;
         private readonly SolidBrush _bSide;
         private readonly SolidBrush _bOrange;
         private readonly Pen _pLine;
         private readonly Pen _pOrange;
         private readonly Pen _pRing;
-        private readonly Pen _pFaint;
 
         public Shell(List<Agent> agents)
         {
@@ -107,7 +108,6 @@ namespace AgentHub
             Bounds = new Rectangle(scr.X, scr.Y, _sideW, scr.Height);
             BackColor = SideBg;
 
-            _fIcon = new Font("Microsoft YaHei UI", 12f, FontStyle.Bold);
             _fName = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold);
 
             _bSide = new SolidBrush(SideBg);
@@ -115,7 +115,6 @@ namespace AgentHub
             _pLine = new Pen(Line);
             _pOrange = new Pen(Orange, Math.Max(1.5f, Px(2) * 0.9f));
             _pRing = new Pen(OrangeDim, Math.Max(1.6f, Px(2) * 0.8f));
-            _pFaint = new Pen(TextFaint, Math.Max(1.4f, Px(2) * 0.8f));
 
             try
             {
@@ -168,7 +167,6 @@ namespace AgentHub
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
         private int SideExpandedPx { get { return Px(92); } }
-        private int SideCollapsedPx { get { return Px(6); } }
         private int ItemSizePx { get { return Px(52); } }
         private int ItemStepPx { get { return Px(64); } }
         private int ItemTopPx { get { return Px(30); } }
@@ -275,25 +273,7 @@ namespace AgentHub
                 }
             }
 
-            float ct = _expanded ? 1f : 0f;
-            if (Math.Abs(_collapseT - ct) > 0.001f)
-            {
-                _collapseT = Approach(_collapseT, ct, 0.24f);
-                _collapseMoving = true;
-                _sideW = Lerp(SideCollapsedPx, SideExpandedPx, EaseOut(_collapseT));
-                ApplyBounds();
-                active = true;
-            }
-            else if (_collapseMoving)
-            {
-                _collapseMoving = false;
-                _sideW = _expanded ? SideExpandedPx : SideCollapsedPx;
-                ApplyBounds();
-                RepositionShown();
-                active = true;
-            }
-
-            float st = _dockHidden ? 1f : 0f;
+            float st = DockGone ? 1f : 0f;
             if (Math.Abs(_slideT - st) > 0.002f)
             {
                 _slideT = Approach(_slideT, st, 0.30f);
@@ -313,21 +293,16 @@ namespace AgentHub
         private void ApplyBounds()
         {
             if (!IsHandleCreated || IsDisposed) return;
-Rectangle scr = Screen.PrimaryScreen.WorkingArea;
-            // 没有显示任何应用时铺满工作区（黑底 + 开始工作），有应用时只占侧栏
-            int w = (_hiddenToTray || _shown >= 0) ? Math.Max(3, _sideW) : scr.Width;
+            Rectangle scr = Screen.PrimaryScreen.WorkingArea;
+            // 没有显示任何应用时铺满工作区（模式选择页），有应用时只占侧栏
+            int w = (DockGone || _shown >= 0) ? Math.Max(HotStripPx, _sideW) : scr.Width;
             int x = scr.X;
-            if (_hiddenToTray || _shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - 3));
+            if (DockGone || _shown >= 0) x -= (int)Math.Round(_slideT * Math.Max(0, w - HotStripPx));
             if (Bounds.Width != w || Bounds.X != x || Bounds.Y != scr.Y || Bounds.Height != scr.Height)
                 Bounds = new Rectangle(x, scr.Y, w, scr.Height);
         }
 
         // ---------- 绘制 ----------
-
-        private Rectangle ItemRect(int i)
-        {
-            return new Rectangle(ItemXPx, ItemTopPx + i * ItemStepPx, ItemSizePx, ItemSizePx);
-        }
 
         private int AgentIndex(string id)
         {
@@ -393,7 +368,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             return new Rectangle(Px(4), baseR.Y, w, baseR.Height);
         }
 
-        private Rectangle CollapseRect() { return new Rectangle(ItemXPx, Height - Px(68), ItemSizePx, ItemSizePx); }
         private Rectangle ExitRect() { return new Rectangle(ItemXPx, Height - Px(124), ItemSizePx, ItemSizePx); }
 
         private static GraphicsPath Round(Rectangle r, int rad)
@@ -419,13 +393,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(_shown >= 0 ? SideBg : Bg);
-
-            if (_sideW <= SideCollapsedPx + 1)
-            {
-                using (var b = new SolidBrush(_hoverStrip ? Orange : Color.FromArgb(40, 40, 46)))
-                    g.FillRectangle(b, Px(2), 0, Math.Max(2, Px(2)), Height);
-                return;
-            }
 
             g.FillRectangle(_bSide, 0, 0, _sideW, Height);
             g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
@@ -553,29 +520,230 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private readonly List<int> _roles = new List<int>();
         private string _lastCopied = "";
         private string _lastAdvance = "";
+        private int _lastAdvanceRound = -1;
+        private int _lastAdvanceIndex = -1;
         private DateTime _pipeAt = DateTime.Now;
 
-        private Rectangle PipeResetRect()
+        // 协同模式的独立对话窗：每个角色一个，常驻不销毁
+        private readonly AgentDialog[] _dialogs = new AgentDialog[3];
+        // 任务需求输入框（协同未开始时显示在主区）
+        private TextBox _taskBox;
+        // 轮次历史列表的悬停项
+        private int _hoverRound = -1;
+
+        // 三个角色的固定名称：卡片位置 = 角色位置，不随 agent 换而变
+        internal static readonly string[] RoleNames = { "拆解", "执行", "自检" };
+
+        // ---------- 会话/对话窗入口（供 AgentDialog 回调） ----------
+
+        internal PipeSession SessionOf() { return _pipe != null ? _pipe.Session : null; }
+
+        // 打开（或前置）某张卡的对话窗
+        internal void OpenDialog(int k)
         {
-            int cw = Width - _sideW;
-            int w = Px(120), h = Px(64);
-            return new Rectangle(_sideW + (cw - w) / 2 + Px(140), Height - Px(64), w, h);
+            if (k < 0 || k >= _roles.Count) return;
+            int idx = _roles[k];
+            if (idx < 0 || idx >= _agents.Count) return;
+            if (_dialogs[k] == null || _dialogs[k].IsDisposed)
+                _dialogs[k] = new AgentDialog(this, k, _agents[idx].Id, _agents[idx].Name, RoleNames[k]);
+            _dialogs[k].RefreshHistory();
+            _dialogs[k].Show();
+            _dialogs[k].Activate();
+        }
+
+        // AgentDialog 里的「补充需求并发送」
+        internal string DialogAddSupplement(int k, string text)
+        {
+            if (_pipe == null) return null;
+            int idx = _roles[k];
+            var s = _pipe.AddSupplement(_agents[idx].Id, RoleNames[k], text);
+            if (s == null) return null;
+            string hint = _pipe.SupplementHint();
+            Invalidate();
+            return hint;
+        }
+
+        // AgentDialog 里的「打开应用窗口」
+        internal void FocusRoleCard(int k) { FocusTile(k); }
+
+        // 对话窗在退出协同/移除应用/程序退出时都要关掉
+        private void CloseDialogs()
+        {
+            for (int k = 0; k < 3; k++)
+                if (_dialogs[k] != null && !_dialogs[k].IsDisposed) _dialogs[k].Close();
         }
 
         private Rectangle PipeEntryRect() { return new Rectangle(ItemXPx, Height - Px(196), ItemSizePx, ItemSizePx); }
 
+        // ---------- 纵向卡片流水线 ----------
+
+        // 三张卡片从上到下；右侧留出轮次面板的宽度（Px(340)），
+        // 卡片宽度 = 内容区减面板。
         private Rectangle[] TileRects()
         {
-            // 三栏等宽，中间留 28px 给箭头
-            int gap = Px(28);
-            int left = _sideW + Px(18);
-            int totalW = Width - left - Px(18);
-            int w = (totalW - gap * 2) / 3;
-            int top = Px(96);
-            int h = Height - top - Px(150);
+            int left = _sideW + Px(20);
+            int rightW = Px(340);
+            int totalW = Width - left - rightW - Px(20);
+            int top = Px(64);
+            int bottomBar = Px(96);
+            int gap = Px(12);
+            int h = (Height - top - bottomBar - gap * 2) / 3;
             var r = new Rectangle[3];
-            for (int k = 0; k < 3; k++) r[k] = new Rectangle(left + k * (w + gap), top, w, h);
+            for (int k = 0; k < 3; k++) r[k] = new Rectangle(left, top + k * (h + gap), totalW, h);
             return r;
+        }
+
+        // 右侧轮次面板：当前轮次 / 已完成轮数 / 当前阶段 / 各轮结论
+        private Rectangle RoundPanelRect()
+        {
+            return new Rectangle(Width - Px(340) - Px(20) + Px(12), Px(64), Px(340), Height - Px(64) - Px(96));
+        }
+
+        private Rectangle RoundItemRect(int i)
+        {
+            Rectangle p = RoundPanelRect();
+            return new Rectangle(p.X + Px(10), p.Y + Px(120) + i * Px(60), p.Width - Px(20), Px(52));
+        }
+
+        private const int CardHeaderH = 40;   // 头部状态带高度（逻辑 px）
+
+        // 缩略图区 = 卡片去掉头部后的剩余
+        private Rectangle CardThumbRect(Rectangle card)
+        {
+            return new Rectangle(card.X, card.Y + Px(CardHeaderH), card.Width, card.Height - Px(CardHeaderH + 2));
+        }
+
+        // 卡片头部右侧「确认交给下一步」按钮（仅待确认的卡片有）
+        private Rectangle CardConfirmRect(Rectangle card)
+        {
+            return new Rectangle(card.Right - Px(200), card.Y + Px(7), Px(190), Px(26));
+        }
+
+        // 卡片头部的「查看对话」「补充需求」按钮
+        private Rectangle CardDialogRect(Rectangle card)
+        {
+            return new Rectangle(card.Right - Px(390), card.Y + Px(7), Px(88), Px(26));
+        }
+        private Rectangle CardSuppRect(Rectangle card)
+        {
+            return new Rectangle(card.Right - Px(294), card.Y + Px(7), Px(88), Px(26));
+        }
+
+        // 底部操作带的「自动接力」开关
+        private Rectangle PipeAutoRect()
+        {
+            return new Rectangle(_sideW + Px(24), Height - Px(62), Px(170), Px(36));
+        }
+
+        // 阶段 → 角色卡片：固定四段式，拆解和对齐都在卡 1
+        private int CardOfPhase(PipePhase ph)
+        {
+            switch (ph)
+            {
+                case PipePhase.Decompose: return 0;
+                case PipePhase.Execute: return 1;
+                case PipePhase.SelfCheck: return 2;
+                case PipePhase.Align: return 0;
+                default: return -1;
+            }
+        }
+
+        // 卡片状态：0 等待 / 1 运行中 / 2 已完成待确认 / 3 已完成 / 4 失败
+        private int CardStatus(int k)
+        {
+            if (_pipe == null) return 0;
+            switch (_pipe.Phase)
+            {
+                case PipePhase.Idle: return 0;
+                case PipePhase.Finished: return 3;
+                case PipePhase.RoundDone: return 3;
+                default: break;
+            }
+            RoundRecord r = _pipe.CurrentRound;
+            bool hasOut = k == 0 ? (r != null && !string.IsNullOrEmpty(r.Decomposition))
+                        : k == 1 ? (r != null && !string.IsNullOrEmpty(r.Execution))
+                                 : (r != null && !string.IsNullOrEmpty(r.SelfCheck));
+            int active = CardOfPhase(_pipe.Running ? _pipe.Phase : _pipe.RunPhaseForStatus);
+            if (k == active)
+            {
+                if (_pipe.Phase == PipePhase.Failed) return 4;
+                if (_pipe.Phase == PipePhase.Stopped) return 1;
+                if (_pipe.ConfirmPending) return 2;
+                return 1;
+            }
+            return hasOut ? 3 : 0;
+        }
+
+        // 卡片头部显示的角色标签：卡 1 要区分拆解与对齐
+        private string CardRoleLabel(int k)
+        {
+            if (k == 0 && _pipe != null && (_pipe.Phase == PipePhase.Align ||
+                (_pipe.Phase == PipePhase.RoundDone && _pipe.CurrentRound == null)))
+                return "对齐";
+            return RoleNames[k];
+        }
+
+        // 卡片的本轮结果摘要（该 agent 在本轮最近一次输出）
+        private string CardSummary(int k)
+        {
+            if (_pipe == null || _pipe.CurrentRound == null) return "";
+            RoundRecord r = _pipe.CurrentRound;
+            string s = k == 0 ? (r.Decomposition ?? "") : k == 1 ? (r.Execution ?? "") : (r.SelfCheck ?? "");
+            s = s.Replace("\r", " ").Replace("\n", " ").Trim();
+            return s.Length > 120 ? s.Substring(0, 120) + "…" : s;
+        }
+
+        private static string CardStatusText(int st)
+        {
+            switch (st)
+            {
+                case 1: return "运行中";
+                case 2: return "已完成 · 待确认";
+                case 3: return "已完成";
+                case 4: return "失败";
+                default: return "等待中";
+            }
+        }
+
+        private static Color CardStatusColor(int st)
+        {
+            switch (st)
+            {
+                case 1: return Orange;
+                case 2: return Color.FromArgb(214, 150, 30);
+                case 3: return Color.FromArgb(58, 168, 106);
+                case 4: return Color.FromArgb(214, 84, 72);
+                default: return Color.FromArgb(170, 170, 176);
+            }
+        }
+
+        // 注册缩略图前核对源窗口：必须可见、无主、够大。
+        // 选错（比如拿到了 Chromium 启动时的隐藏主窗）就是"缩略图抓到的不是屏幕上那个窗口"。
+        private void FixThumbSource(int k)
+        {
+            int idx = _roles[k];
+            IntPtr cur;
+            bool bad = !_windows.TryGetValue(idx, out cur) || cur == IntPtr.Zero || !Native.IsWindow(cur) ||
+                       !Native.IsWindowVisible(cur) || Native.GetWindowTextLength(cur) == 0;
+            if (!bad) return;
+
+            IntPtr better = Host.FindVisible(_agents[idx], DateTime.MinValue);
+            if (better != IntPtr.Zero && better != cur)
+            {
+                Program.Log("thumb " + k + " reswitch " + cur + " -> " + better + " title='" + Native.Title(better) + "'");
+                _windows[idx] = better;
+                // 换了句柄，旧缩略图指向的可能就是那个错窗口，一并换掉
+                UnregisterThumb(k);
+            }
+        }
+
+        private void UnregisterThumb(int k)
+        {
+            if (_thumbs[k] != IntPtr.Zero)
+            {
+                Native.DwmUnregisterThumbnail(_thumbs[k]);
+                _thumbs[k] = IntPtr.Zero;
+            }
         }
 
         private void UpdateThumbs()
@@ -584,22 +752,29 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Rectangle[] rr = TileRects();
             for (int k = 0; k < 3; k++)
             {
+                FixThumbSource(k);
                 if (_thumbs[k] == IntPtr.Zero)
                 {
                     IntPtr h;
                     if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) continue;
+                    if (!Native.IsWindowVisible(h)) continue;   // 不可见的宁可不注册，等下一轮
                     IntPtr th;
-                    if (Native.DwmRegisterThumbnail(Handle, h, out th) != 0) continue;
+                    int hr = Native.DwmRegisterThumbnail(Handle, h, out th);
+                    Program.Log("thumb " + k + " hr=" + hr + " src=" + h + " title='" + Native.Title(h) + "'");
+                    if (hr != 0) continue;
                     _thumbs[k] = th;
                 }
                 var props = new Native.DWM_THUMBNAIL_PROPERTIES();
                 props.dwFlags = Native.DWM_TNP_RECTDESTINATION | Native.DWM_TNP_VISIBLE | Native.DWM_TNP_OPACITY;
+                // 缩略图只铺卡片的缩略区（头部留给状态徽章和确认按钮）
+                Rectangle t = CardThumbRect(rr[k]);
                 props.rcDestination = new Native.RECT();
-                props.rcDestination.Left = rr[k].X + 4;
-                props.rcDestination.Top = rr[k].Y + 4;
-                props.rcDestination.Right = rr[k].Right - 4;
-                props.rcDestination.Bottom = rr[k].Bottom - 4;
+                props.rcDestination.Left = t.X;
+                props.rcDestination.Top = t.Y;
+                props.rcDestination.Right = t.Right;
+                props.rcDestination.Bottom = t.Bottom;
                 props.opacity = 255;
+                // 放大时三张小缩略图都藏（真实窗口盖在上面），只留右侧窄条那张继续当"预览"
                 props.fVisible = _focusIdx < 0;
                 Native.DwmUpdateThumbnailProperties(_thumbs[k], ref props);
             }
@@ -613,29 +788,76 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Native.ShowWindow(h, Native.SW_SHOW);
             if (off)
             {
-                Rectangle scr = Screen.PrimaryScreen.WorkingArea;
-                Native.SetWindowPos(h, Handle, scr.Width + 200, 0, 0, 0,
+                // 最大化窗口无视 SetWindowPos 的位置参数，必须先取消最大化
+                if (Native.IsZoomed(h)) Native.ShowWindow(h, Native.SW_RESTORE);
+                // 停到整个虚拟桌面（含副屏）的右边外。只按主屏宽度算的话，
+                // 主屏右侧插了副屏时"屏外"其实还在副屏上
+                int parkX = SystemInformation.VirtualScreen.Right + 200;
+                bool ok = Native.SetWindowPos(h, Handle, parkX, 0, 0, 0,
                     Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+                Native.RECT r;
+                Native.GetWindowRect(h, out r);
+                Program.Log("park " + k + " ok=" + ok + " -> " + r.Left + "," + r.Top + " " + (r.Right - r.Left) + "x" + (r.Bottom - r.Top) + " zoomed=" + Native.IsZoomed(h));
             }
         }
 
         private void FocusTile(int k)
         {
-            IntPtr h;
             if (k < 0 || k >= _roles.Count) return;
-            if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) return;
+            int idx = _roles[k];
+            if (idx < 0 || idx >= _agents.Count) return;
+            IntPtr h;
+            if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h)) return;
             _focusIdx = k;
             _tileDone[k] = false;
-            Host.Apply(h, Handle, ContentRect(), _agents[_roles[k]].OffsetFrame);
+            // 放大但不占满屏：右侧留 1/4 露出窄条（其他卡片预览 + 自己的小卡），
+            // 底部留一条，能看到流程状态；对话框和上一次对话都还在窗口里
+            Rectangle zoom = ZoomRect(k);
+            Host.Apply(h, Handle, zoom, _agents[idx].OffsetFrame);
             Native.SetWindowPos(h, (IntPtr)0, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
             Host.ForceForeground(h);
+            PipeReturnButton.Show(BackToPipeView);   // 悬浮在应用窗口之上，点了就回卡片流
+            ApplyBounds();
+            Invalidate();
+        }
+
+        // 放大后的窗口矩形：不占满内容区——右侧留 stripW 给预览窄条，底部留 bottom 给状态
+        private Rectangle ZoomRect(int k)
+        {
+            Rectangle content = ContentRect();
+            int stripW = Math.Max(Px(180), content.Width / 4);
+            int bottom = Px(72);
+            return new Rectangle(content.X, content.Y, content.Width - stripW, content.Height - bottom);
+        }
+
+        // 放大时右侧窄条里自己的小卡（点它 = 回卡片流）
+        private Rectangle ZoomMiniRect(int k)
+        {
+            Rectangle content = ContentRect();
+            int stripW = Math.Max(Px(180), content.Width / 4);
+            int stripX = content.Right - stripW;
+            int top = Px(64);
+            int bottomBar = Px(72);
+            int gap = Px(14);
+            int h = (content.Height - top - bottomBar - gap * 2) / 3;
+            return new Rectangle(stripX + Px(12), top + k * (h + gap), stripW - Px(24), h);
+        }
+
+        // 聚焦应用时左上角悬浮的返回按钮：回到流程条视图，应用保持已选不取消
+        private void BackToPipeView()
+        {
+            if (_focusIdx < 0) return;
+            PipeReturnButton.Hide();
+            ParkOffscreen(_focusIdx, true);
+            _focusIdx = -1;
             ApplyBounds();
             Invalidate();
         }
 
         private void BackToGrid()
         {
+            PipeReturnButton.Hide();
             if (_focusIdx >= 0) ParkOffscreen(_focusIdx, true);
             _focusIdx = -1;
             ApplyBounds();
@@ -645,41 +867,80 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         private void TileTick()
         {
             if (!_tiled || _focusIdx >= 0 || _roles.Count < 3) return;
-            Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             for (int k = 0; k < 3; k++)
             {
                 IntPtr h;
                 if (!_windows.TryGetValue(_roles[k], out h) || !Native.IsWindow(h)) continue;
                 Native.RECT r;
                 if (!Native.GetWindowRect(h, out r)) continue;
-                if (r.Left < scr.Width) ParkOffscreen(k, true);   // 还在屏幕内就挪出去
+                // 只要还露在虚拟桌面（含副屏）里就再挪出去
+                if (r.Left < SystemInformation.VirtualScreen.Right) ParkOffscreen(k, true);
             }
         }
 
-        // 只保留选中的三个：其余在 AgentHub 里开着的全部清掉
+        // DWM 缩略图是有名字的内核资源，必须显式注销；
+        // 直接把 _thumbs[k] 置零会让旧缩略图继续挂在画布上，直到进程退出
+        private void UnregisterThumbs()
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                if (_thumbs[k] != IntPtr.Zero)
+                {
+                    Native.DwmUnregisterThumbnail(_thumbs[k]);
+                    _thumbs[k] = IntPtr.Zero;
+                }
+            }
+        }
+
+        // 把选中的三个角色摆成三栏平铺；已选但非角色的应用不杀，留给用户自己决定
         private void StartSynergy()
         {
-            var cur = new List<int>(_chosen);
-            foreach (int idx in cur) if (!_roles.Contains(idx)) Cancel(idx);
-            for (int k = 0; k < _roles.Count; k++)
+            // 名额判定：角色 + 已选合并后不能超过 3 个。
+            // 超了也不自动杀（ADR 0001：程序不做自动淘汰），把选择权交回用户。
+            var need = new HashSet<int>(_roles);
+            foreach (int i in _chosen) need.Add(i);
+            if (need.Count > MaxSlots)
             {
-                int idx = _roles[k];
-                if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
+                Toast.Show("角色和已选应用合起来超过 " + MaxSlots + " 个，请先右键取消一些");
+                _picking = true;   // 留在挑选状态，改完再点满三个即启动
+                Invalidate();
+                return;
             }
+
             _shown = -1;
             _tiled = true;
             _focusIdx = -1;
-            for (int k = 0; k < 3; k++) { _tileDone[k] = false; _thumbs[k] = IntPtr.Zero; }
+            UnregisterThumbs();
+            for (int k = 0; k < 3; k++) _tileDone[k] = false;
+            // 先进入平铺状态再启动，否则"进程已在运行"的角色会瞬间走完普通启动流程
+            foreach (int idx in _roles)
+                if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
             ApplyBounds();
             Invalidate();
         }
 
+        // 会话正在进行时被打断（点「协」退出 / 移除角色应用）：
+        // 结束会话并落盘，记录不丢——用户随时能在右侧面板查看
+        private void EndSessionIfAny()
+        {
+            if (_pipe != null && _pipe.Session != null && !_pipe.Session.Ended)
+            {
+                _pipe.Finish();
+                SavePipeResult();
+            }
+            if (_taskBox != null && _taskBox.Visible) _taskBox.Visible = false;
+            CloseDialogs();
+        }
+
         private void ExitSynergy()
         {
+            EndSessionIfAny();
             var cur2 = new List<int>(_chosen);
             foreach (int idx in cur2) Cancel(idx);
             _roles.Clear();
             _tiled = false;
+            PipeReturnButton.Hide();
+            UnregisterThumbs();
             for (int k = 0; k < 3; k++) _tileDone[k] = false;
             _picking = false;
             _mode = -1;
@@ -688,26 +949,37 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Invalidate();
         }
 
-        private void ShowPipelineView()
+        // 协同角色对应的应用被移除时调用：不杀其余应用（那是用户自己的选择），
+        // 退出平铺、把它们留作普通已选，之后点侧栏图标即可查看
+        private void AbandonSynergyKeepApps()
         {
-            _mode = 1;
-            _pipe = new Pipeline(PipeConfig.Load());   // 每次都重读，改完 json 立刻生效
-            if (_roles.Count < 3) { _picking = true; _roles.Clear(); }
-            IntPtr h;
-            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h)) Host.Hide(h);
-            _shown = -1;
-            _hiddenToTray = false;
-            _dockHidden = false;
+            EndSessionIfAny();
+            PipeReturnButton.Hide();
+            UnregisterThumbs();
+            _tiled = false;
+            _focusIdx = -1;
+            _roles.Clear();
+            _picking = false;
+            for (int k = 0; k < 3; k++) _tileDone[k] = false;
             ApplyBounds();
             Invalidate();
         }
 
-        private Rectangle PipeButtonRect()
+        private void ShowPipelineView()
         {
-            int cw = Width - _sideW;
-            int w = Px(240), h = Px(64);
-            return new Rectangle(_sideW + (cw - w) / 2, Height - Px(64), w, h);
+            _mode = 1;
+            if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());   // 每次新建都重读 json，改完立刻生效
+            if (_roles.Count < 3) { _picking = true; _roles.Clear(); }
+            else _picking = false;   // 角色还在：直接回卡片视图
+            IntPtr h;
+            if (_shown >= 0 && _windows.TryGetValue(_shown, out h) && Native.IsWindow(h)) Host.Hide(h);
+            _shown = -1;
+            _dock = DockState.Visible;
+            ApplyBounds();
+            Invalidate();
         }
+
+        // ---------- 协同动作层：界面按钮 ↔ Pipeline 调度的接线 ----------
 
         private void PipeCopy(string text)
         {
@@ -715,218 +987,653 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             try { Clipboard.SetText(_lastCopied); } catch { }
         }
 
-        private void PipeAdvance()
+        // 交付提示词：写剪贴板 + 记入该角色的对话记录
+        private void DeliverPrompt(string prompt)
+        {
+            if (string.IsNullOrEmpty(prompt)) return;
+            int k = CardOfPhase(_pipe.Phase);
+            string aid = null;
+            if (k >= 0 && k < _roles.Count)
+            {
+                int idx = _roles[k];
+                if (idx >= 0 && idx < _agents.Count) aid = _agents[idx].Id;
+            }
+            _pipe.LogChat(aid, 0, prompt);
+            PipeCopy(prompt);
+        }
+
+        // 下一接收者名字（确认交接前调用）
+        private string NextRoleName()
+        {
+            if (_pipe == null || !_pipe.Running) return "";
+            int next = _pipe.Phase == PipePhase.Decompose ? 1
+                     : _pipe.Phase == PipePhase.Execute ? 2
+                     : _pipe.Phase == PipePhase.SelfCheck ? 0 : -1;
+            if (next < 0 || next >= _roles.Count) return "";
+            int idx = _roles[next];
+            return idx >= 0 && idx < _agents.Count ? _agents[idx].Name : "";
+        }
+
+        // 开始协同：从输入框读需求
+        private void StartFromBox()
         {
             if (_pipe == null) return;
-            string clip = Clipboard.ContainsText() ? Clipboard.GetText() : "";
-            if (!_pipe.Running)
-            {
-                if (clip.Trim().Length == 0) { Toast.Show("先把需求复制到剪贴板，再点开始"); return; }
-                _pipe.Start(clip);
-                _pipeAt = DateTime.Now;
-                PipeCopy(_pipe.ComposePrompt());
-                Toast.Show("提示词已复制，切到「" + _pipe.Current.Agent + "」粘贴");
-            }
-            else
-            {
-                if (clip.Trim().Length == 0) { Toast.Show("先把上一步的回复复制下来"); return; }
-                PipeAdvanceWith(clip);
-            }
+            string err = _pipe.Start(_taskBox != null ? _taskBox.Text : "");
+            if (err != null) { Toast.Show(err); return; }   // 空需求 / 未结束会话，明确反馈
+            _pipeAt = DateTime.Now;
+            _lastAdvance = "";
+            DeliverPrompt(_pipe.CurrentPrompt());
+            Toast.Show("第 1 轮已开始，提示词在剪贴板，去「拆解」粘贴");
+            FocusCurrent();
             Invalidate();
+        }
+
+        // 步级交接（人工确认 / 自动接力共用）：确认 + 交付 + 切窗
+        private void Handoff()
+        {
+            if (_pipe == null || !_pipe.ConfirmPending) return;
+            string next = NextRoleName();   // 确认前取名字
+            string prompt = _pipe.Confirm();
+            if (prompt == null) return;
+            _pipeAt = DateTime.Now;
+            _lastAdvance = "";
+            DeliverPrompt(prompt);
+            Toast.Show("已交给「" + (next.Length > 0 ? next : "下一步") + "」，提示词在剪贴板");
+            FocusCurrent();
+            Invalidate();
+        }
+
+        // 轮末「继续下一轮」：只能从这里进新轮
+        private void NextRound()
+        {
+            string prompt = _pipe.ContinueRound();
+            if (prompt == null) { Toast.Show("已达最大轮数（" + _pipe.Config.MaxRounds + "），请结束协同"); return; }
+            _pipeAt = DateTime.Now;
+            _lastAdvance = "";
+            DeliverPrompt(prompt);
+            Toast.Show("第 " + _pipe.CurrentRoundNo + " 轮开始，提示词已交给「拆解」");
+            FocusCurrent();
+            Invalidate();
+        }
+
+        private void ResumeFlow()
+        {
+            string prompt = _pipe.Resume();
+            if (prompt == null) return;
+            _pipeAt = DateTime.Now;
+            DeliverPrompt(prompt);
+            Toast.Show("已恢复，提示词已重新复制");
+            FocusCurrent();
+            Invalidate();
+        }
+
+        // 失败重试：重交当前步提示词；窗口没了就把应用再拉起来（无重复副作用：只复制提示词）
+        private void RetryFlow()
+        {
+            string prompt = _pipe.Retry();
+            if (prompt == null) return;
+            _pipeAt = DateTime.Now;
+            DeliverPrompt(prompt);
+            int k = CardOfPhase(_pipe.Phase);
+            if (k >= 0 && k < _roles.Count)
+            {
+                int idx = _roles[k];
+                IntPtr h;
+                if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h))
+                {
+                    if (!_chosen.Contains(idx)) { _chosen.Add(idx); StartAgent(idx); }
+                }
+                else FocusCurrent();
+            }
+            Toast.Show("已重试，窗口就绪后粘贴继续");
+            Invalidate();
+        }
+
+        // 结束协同：保留会话记录（落盘 .scratch + 内存 Session 供右侧面板查看）
+        private void FinishFlow()
+        {
+            _pipe.Finish();
+            SavePipeResult();
+            Toast.Show("协同已结束，轮次记录在右侧，报告在 .scratch");
+            Invalidate();
+        }
+
+        // 手动推进（没被剪贴板捕获时兜底）
+        private void CaptureManual()
+        {
+            string clip = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+            if (clip.Trim().Length == 0) { Toast.Show("先复制应用里的回复，再点这里"); return; }
+            PipeAdvanceWith(clip, true);
         }
 
         private void SavePipeResult()
         {
             try
             {
+                PipeSession s = _pipe.Session;
+                if (s == null) return;
                 string dir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".scratch");
                 System.IO.Directory.CreateDirectory(dir);
                 string name = "pipeline-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".md";
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine("# 协同流水线结果").AppendLine();
-                sb.AppendLine("- 结果：" + (_pipe.Done ? "满足，已完成" : "未通过，已中止"));
-                sb.AppendLine("- 轮次：" + _pipe.Round + " / " + _pipe.Config.MaxRounds);
-                sb.AppendLine("- 需求：" + _pipe.Task).AppendLine();
-                sb.AppendLine("## 最后一轮输出").AppendLine().AppendLine(_pipe.LastOutput);
+                sb.AppendLine("# 三 Agent 协同 · 会话记录").AppendLine();
+                sb.AppendLine("- 开始时间：" + s.StartedAt.ToString("yyyy-MM-dd HH:mm:ss"));
+                sb.AppendLine("- 完成轮数：" + s.Rounds.Count);
+                sb.AppendLine("- 原始需求：" + s.Task).AppendLine();
+                foreach (RoundRecord r in s.Rounds)
+                {
+                    sb.AppendLine("## 第 " + r.Number + " 轮（" + r.FinishedAt.ToString("HH:mm:ss") + "）").AppendLine();
+                    sb.AppendLine("### 拆解（含验收标准）").AppendLine(r.Decomposition ?? "").AppendLine();
+                    sb.AppendLine("### 执行结果").AppendLine(r.Execution ?? "").AppendLine();
+                    sb.AppendLine("### 自检").AppendLine(r.SelfCheck ?? "").AppendLine();
+                    sb.AppendLine("### 对齐结论").AppendLine(r.Alignment ?? "").AppendLine();
+                    if (!string.IsNullOrEmpty(r.UserAddition)) sb.AppendLine("### 本轮用户补充").AppendLine(r.UserAddition).AppendLine();
+                }
+                if (s.Supplements.Count > 0)
+                {
+                    sb.AppendLine("## 补充需求记录").AppendLine();
+                    foreach (Supplement sp in s.Supplements)
+                        sb.AppendLine("- [" + sp.Time.ToString("HH:mm:ss") + " 来自" + sp.RoleName + " · " +
+                            (sp.Applied ? "已生效于" + sp.RoundTag : "未生效") + "] " + sp.Text);
+                }
                 System.IO.File.WriteAllText(System.IO.Path.Combine(dir, name), sb.ToString(), System.Text.Encoding.UTF8);
-                Toast.Show("结果已存到 .scratch\\" + name);
+                Toast.Show("会话记录已存到 .scratch\\" + name);
             }
             catch { }
         }
 
-        private void PipeAdvanceWith(string output)
+        // manual：按钮点的还是剪贴板监听自己推进的。手动时要给反馈，
+        // 否则剪贴板没换内容时按钮像坏了一样毫无反应
+        private void PipeAdvanceWith(string output, bool manual)
         {
             if (_pipe == null || !_pipe.Running) return;
-            if (output == _lastCopied) return;   // 忽略我们自己写进去的那份
-            if (output.Length < 20) return;      // 顺手复制个单词不该推进
-            if (output == _lastAdvance) return;  // 同一份复制只消费一次
+            // 迟到响应闸门：停确认处 / 已停止 / 已失败时，剪贴板变化一概不推进
+            if (_pipe.Phase == PipePhase.RoundDone || _pipe.Phase == PipePhase.Stopped || _pipe.Phase == PipePhase.Failed) return;
+            if (output == _lastCopied)
+            {
+                if (manual) Toast.Show("先复制应用里的回复，再点这里");
+                return;   // 忽略我们自己写进去的那份
+            }
+            if (output.Length < 20)
+            {
+                if (manual) Toast.Show("复制的内容太短，不像是这一步的输出");
+                return;   // 顺手复制个单词不该推进
+            }
+            // 同一份复制只消费一次（按 轮次+阶段 去重，重复点击无效果）
+            if (output == _lastAdvance &&
+                _pipe.CurrentRoundNo == _lastAdvanceRound && _pipe.StepIndex == _lastAdvanceIndex) return;
             _lastAdvance = output;
-            _pipe.Advance(output);
+            _lastAdvanceRound = _pipe.CurrentRoundNo;
+            _lastAdvanceIndex = _pipe.StepIndex;
+
+            int card = CardOfPhase(_pipe.Phase);
+            string aid = null;
+            if (card >= 0 && card < _roles.Count)
+            {
+                int idx = _roles[card];
+                if (idx >= 0 && idx < _agents.Count) aid = _agents[idx].Id;
+            }
+            if (!_pipe.Advance(output)) return;   // 状态闸门没过（迟到响应）
+            _pipe.LogChat(aid, 1, output);         // agent 回复进对话记录
             _pipeAt = DateTime.Now;
-            if (_pipe.Running) PipeCopy(_pipe.ComposePrompt());
-            else SavePipeResult();
+            if (_pipe.ConfirmPending && _pipe.Config.AutoAdvance)
+            {
+                Handoff();   // 自动接力：步级不等确认；轮级仍停在用户确认
+                return;
+            }
+            if (_pipe.Phase == PipePhase.Finished) { SavePipeResult(); return; }
             Toast.Show(_pipe.Note);
             Invalidate();
+        }
+
+        // 把主窗让开，让"当前步"的 agent 窗口到前台工作（不取消任何应用）
+        private void FocusCurrent()
+        {
+            if (_pipe == null || !_pipe.Running) return;
+            int k = CardOfPhase(_pipe.Phase);
+            if (k < 0 || k >= _roles.Count) return;
+            int idx = _roles[k];
+            if (idx < 0 || idx >= _agents.Count) return;
+            IntPtr h;
+            if (!_windows.TryGetValue(idx, out h) || !Native.IsWindow(h)) return;
+            _shown = -1;
+            Host.Apply(h, Handle, ZoomRect(k), _agents[idx].OffsetFrame);
+            Native.SetWindowPos(h, (IntPtr)0, 0, 0, 0, 0,
+                Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            Host.ForceForeground(h);
+            _focusIdx = k;
+            PipeReturnButton.Show(BackToPipeView);
+            ApplyBounds();
         }
 
         // 剪贴板一变就看看是不是"这一步的输出复制好了"
         private void ClipboardChanged()
         {
-            if (_mode != 1 || _pipe == null || !_pipe.Running) return;
+            if (_mode != 1 || _pipe == null) return;
+            if (!_pipe.Running || _pipe.ConfirmPending) return;   // 待确认/非运行时忽略（防迟到响应）
             string clip;
             try { clip = Clipboard.ContainsText() ? Clipboard.GetText() : ""; } catch { return; }
             if (clip.Length == 0 || clip == _lastCopied) return;
-            PipeAdvanceWith(clip);
+            PipeAdvanceWith(clip, false);
         }
+
+        // ---------- 协同绘制 ----------
 
         private void DrawSynergy(Graphics g)
         {
             Rectangle[] rr = TileRects();
-            float k = _tileIn;
+            bool running = _pipe != null && _pipe.Running;
 
-            using (var f = new Font("微软雅黑", Px(26), FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var b = new SolidBrush(TextBlack))
-                g.DrawString("多 agent 协同 · 第 " + (_pipe != null ? _pipe.Round : 1) + " 轮",
-                    f, b, _sideW + Px(20), Px(24));
-
-            for (int i = 0; i < 3 && i < _roles.Count; i++)
+            // 放大态：右侧窄条画三张小卡（点击切换/返回），其余被应用窗口盖住
+            if (_focusIdx >= 0)
             {
-                bool cur = _pipe != null && _pipe.Running && i == _pipe.Index;
-                Color edge = cur ? Orange : Color.FromArgb(226, 226, 230);
-                Rectangle r = rr[i];
-                Rectangle frame = new Rectangle(r.X - 2, r.Y - 2 + (cur ? Px(-6) : 0), r.Width + 4, r.Height + 4);
-                using (var pen = new Pen(edge, cur ? 2.6f : 1.2f))
-                using (var path = Round(frame, Px(14)))
-                    g.DrawPath(pen, path);
-
-                string label = (i + 1) + "  " + _agents[_roles[i]].Name;
-                using (var f2 = new Font("微软雅黑", Px(16), cur ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
-                using (var b2 = new SolidBrush(cur ? Orange : Color.FromArgb(120, 120, 128)))
-                    g.DrawString(label, f2, b2, r.X + Px(4), r.Y - Px(34) + (cur ? Px(-6) : 0));
-
-                if (i < 2)
+                Rectangle content = ContentRect();
+                int stripW = Math.Max(Px(180), content.Width / 4);
+                int stripX = content.Right - stripW;
+                using (var bg = new SolidBrush(Color.FromArgb(245, 245, 247)))
+                    g.FillRectangle(bg, stripX, content.Y, stripW, content.Height);
+                for (int k = 0; k < 3 && k < _roles.Count; k++)
                 {
-                    int ax = r.Right + Px(2);
-                    int ay = r.Y + r.Height / 2;
-                    using (var pen = new Pen(Color.FromArgb(200, 200, 206), Math.Max(2f, Px(2))))
-                    {
-                        pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
-                        g.DrawLine(pen, ax, ay, ax + Px(24), ay);
-                        g.DrawLine(pen, ax + Px(16), ay - Px(6), ax + Px(24), ay);
-                        g.DrawLine(pen, ax + Px(16), ay + Px(6), ax + Px(24), ay);
-                    }
+                    if (_roles[k] < 0 || _roles[k] >= _agents.Count) continue;
+                    Rectangle mini = ZoomMiniRect(k);
+                    int st = CardStatus(k);
+                    using (var path = Round(mini, Px(10)))
+                    using (var bg = new SolidBrush(k == _focusIdx ? Color.FromArgb(255, 243, 234) : Color.FromArgb(250, 250, 252)))
+                        g.FillPath(bg, path);
+                    using (var path = Round(mini, Px(10)))
+                    using (var pen = new Pen(k == _focusIdx ? Orange : Color.FromArgb(220, 220, 224), k == _focusIdx ? Px(2) : Px(1)))
+                        g.DrawPath(pen, path);
+                    using (var f = new Font("微软雅黑", Px(15), k == _focusIdx ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                    using (var b = new SolidBrush(k == _focusIdx ? Orange : TextBlack))
+                        g.DrawString((k + 1) + " " + CardRoleLabel(k) + " · " + _agents[_roles[k]].Name, f, b,
+                            new Rectangle(mini.X + Px(10), mini.Y + Px(8), mini.Width - Px(20), Px(26)));
+                    using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+                    using (var b = new SolidBrush(CardStatusColor(st)))
+                        g.DrawString(CardStatusText(st), f, b, mini.X + Px(10), mini.Y + Px(38));
+                    using (var f = new Font("微软雅黑", Px(11), FontStyle.Regular, GraphicsUnit.Pixel))
+                    using (var b = new SolidBrush(Color.FromArgb(150, 150, 158)))
+                        g.DrawString(k == _focusIdx ? "点击返回流水线" : "点击切换到这里", f, b, mini.X + Px(10), mini.Bottom - Px(26));
                 }
-            }
-
-            // 回环：从第三栏底部绕回第一栏
-            int ly = Height - Px(96);
-            int x1 = rr[0].X + rr[0].Width / 2, x3 = rr[2].X + rr[2].Width / 2;
-            using (var pen = new Pen(Orange, Math.Max(2f, Px(2))))
-            {
-                pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
-                g.DrawLine(pen, x3, Height - Px(150), x3, ly);
-                g.DrawLine(pen, x1, ly, x3, ly);
-                g.DrawLine(pen, x1, Height - Px(150), x1, ly);
-                g.DrawLine(pen, x1, ly - Px(8), x1, ly + Px(8));
-                g.DrawLine(pen, x1 + Px(8), ly - Px(8), x1, ly);
-                g.DrawLine(pen, x1 + Px(8), ly + Px(8), x1, ly);
-            }
-            using (var f = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var b = new SolidBrush(Orange))
-                g.DrawString("判定不满足 → 回到第 1 步", f, b, x1 + Px(22), ly - Px(30));
-
-            Rectangle br = PipeButtonRect();
-            float sc = 1f + (_hoverBtn == 0 ? 0.04f : 0f) - _pressT * 0.02f;
-            Rectangle sbr = new Rectangle(br.X - (int)(br.Width * (sc - 1) / 2), br.Y - (int)(br.Height * (sc - 1) / 2),
-                (int)(br.Width * sc), (int)(br.Height * sc));
-            using (var path = Round(sbr, Px(16)))
-            using (var b = new SolidBrush(Orange))
-                g.FillPath(b, path);
-            string label2 = !_pipe.Running ? "开始" : (_pipe.Paused ? "继续" : "下一步");
-            using (var f = new Font("微软雅黑", Px(18), FontStyle.Bold, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, label2, f, sbr, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        }
-
-        private void DrawPipeline(Graphics g)
-        {
-            if (_picking)
-            {
-                using (var f0 = new Font("微软雅黑", Px(34), FontStyle.Bold, GraphicsUnit.Pixel))
-                using (var b0 = new SolidBrush(TextBlack))
-                    g.DrawString("点侧栏选三个应用作为角色", f0, b0, _sideW + Px(80), Height * 0.20f);
-                using (var f1 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
-                using (var b1 = new SolidBrush(Color.FromArgb(120, 120, 128)))
-                    g.DrawString("已选 " + _roles.Count + " / 3　·　顺序就是接力顺序", f1, b1, _sideW + Px(80), Height * 0.20f + Px(52));
-                int yy = (int)(Height * 0.34f);
-                for (int k = 0; k < _roles.Count; k++)
+                // 底部状态带
+                Rectangle bottom = new Rectangle(content.X, content.Bottom - Px(72), content.Width - stripW, Px(72));
+                using (var bg = new SolidBrush(Color.FromArgb(245, 245, 247)))
+                    g.FillRectangle(bg, bottom);
+                using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(Color.FromArgb(110, 110, 118)))
                 {
-                    using (var f2 = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
-                    using (var b2 = new SolidBrush(Orange))
-                        g.DrawString((k + 1) + "  " + _agents[_roles[k]].Name, f2, b2, _sideW + Px(80), yy);
-                    yy += Px(40);
+                    string tip = running
+                        ? (_pipe.ConfirmPending ? "本步已完成 → 回流水线点确认（或开自动接力）" : "干完复制回复即自动捕获；Esc 或右上按钮回流水线")
+                        : "Esc 或右上按钮回流水线";
+                    g.DrawString(tip, f, b, bottom.X + Px(16), bottom.Y + Px(10));
+                    g.DrawString("协同 · 第 " + (_pipe != null ? _pipe.CurrentRoundNo : 1) + " 轮 · 已完成 " +
+                        (_pipe != null ? _pipe.CompletedRounds : 0) + " 轮", f, b, bottom.X + Px(16), bottom.Y + Px(36));
                 }
                 return;
             }
 
-            if (_pipe == null) _pipe = new Pipeline(PipeConfig.Load());
-
-            int cw = Width - _sideW;
-            int x = _sideW + Px(80);
-
-            using (var f = new Font("微软雅黑", Px(40), FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var b = new SolidBrush(TextBlack))
-                g.DrawString("多 agent 协同 · 第 " + _pipe.Round + " 轮", f, b, x, Height * 0.16f);
-
-            int y = (int)(Height * 0.28f);
-            for (int i = 0; i < _pipe.StepCount; i++)
-            {
-                PipeStep s = _pipe.Config.Steps[i];
-                bool cur = _pipe.Running && i == _pipe.Index;
-                bool passed = _pipe.Running ? i < _pipe.Index : _pipe.Done;
-
-                if (cur)
-                    using (var b = new SolidBrush(Orange))
-                        g.FillRectangle(b, x - Px(18), y + Px(4), Px(5), Px(30));
-
-                using (var f = new Font("微软雅黑", Px(22), cur ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
-                using (var b = new SolidBrush(cur ? Orange : (passed ? Color.FromArgb(150, 150, 158) : TextBlack)))
-                    g.DrawString((i + 1) + "  " + s.Role, f, b, x, y);
-
-                using (var f2 = new Font("微软雅黑", Px(14), FontStyle.Regular, GraphicsUnit.Pixel))
-                using (var b2 = new SolidBrush(Color.FromArgb(160, 160, 168)))
-                    g.DrawString(s.Agent, f2, b2, x + Px(260), y + Px(8));
-
-                y += Px(56);
-            }
-
-            using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var b = new SolidBrush(Color.FromArgb(110, 110, 118)))
-                g.DrawString(_pipe.Note.Length > 0 ? _pipe.Note : "把需求复制到剪贴板，点开始", f, b, x, Height * 0.60f);
-
-            Rectangle br = PipeButtonRect();
-            using (var path = Round(br, Px(16)))
-            {
-                using (var b = new SolidBrush(Orange))
-                    g.FillPath(b, path);
-            }
-            string label = !_pipe.Running ? (_pipe.Done || _pipe.Aborted ? "再来一轮" : "开始")
-                : (_pipe.Paused ? "继续" : "下一步");
-            Rectangle rr = PipeResetRect();
-            using (var path2 = Round(rr, Px(16)))
-            using (var b2 = new SolidBrush(Color.FromArgb(240, 240, 243)))
-                g.FillPath(b2, path2);
-            using (var f2 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, "重置", f2, rr, Color.FromArgb(90, 90, 98),
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-
+            // 标题
             using (var f = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
-                TextRenderer.DrawText(g, label, f, br, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            using (var b = new SolidBrush(TextBlack))
+            {
+                string title = "三 Agent 协同";
+                if (_pipe != null && (running || _pipe.Phase == PipePhase.RoundDone || _pipe.Phase == PipePhase.Stopped || _pipe.Phase == PipePhase.Failed))
+                    title += " · 第 " + _pipe.CurrentRoundNo + " 轮";
+                g.DrawString(title, f, b, rr[0].X, Px(16));
+            }
 
+            // 输入阶段（会话未开始）：第一张卡的位置放任务输入框
+            bool inputPhase = _pipe == null || _pipe.Phase == PipePhase.Idle;
+
+            for (int k = 0; k < 3 && k < _roles.Count; k++)
+            {
+                if (_roles[k] < 0 || _roles[k] >= _agents.Count) continue;
+                Rectangle card = rr[k];
+                if (inputPhase && k == 0) { DrawTaskInput(g, card); continue; }
+
+                int st = CardStatus(k);
+                Agent a = _agents[_roles[k]];
+
+                // 卡片底与边
+                using (var path = Round(card, Px(12)))
+                using (var bg = new SolidBrush(st == 1 ? Color.FromArgb(252, 248, 242) : Color.FromArgb(247, 247, 249)))
+                    g.FillPath(bg, path);
+                using (var path = Round(card, Px(12)))
+                using (var pen = new Pen(st >= 1 ? CardStatusColor(st) : Color.FromArgb(222, 222, 226), st == 1 ? Px(2) : Px(1)))
+                    g.DrawPath(pen, path);
+
+                // 头部：序号 + 角色 + Agent + 状态徽章
+                Rectangle head = new Rectangle(card.X, card.Y, card.Width, Px(CardHeaderH));
+                using (var f = new Font("微软雅黑", Px(16), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(st >= 1 ? CardStatusColor(st) : TextBlack))
+                    g.DrawString((k + 1) + "  " + CardRoleLabel(k) + " · " + a.Name, f, b,
+                        new Rectangle(head.X + Px(14), head.Y + Px(6), Px(330), head.Height - Px(10)),
+                        new StringFormat { LineAlignment = StringAlignment.Center });
+
+                string stText = CardStatusText(st);
+                Size stSz = TextRenderer.MeasureText(stText, _fName);
+                var badge = new Rectangle(head.X + Px(350), head.Y + (head.Height - Px(22)) / 2, stSz.Width + Px(20), Px(22));
+                using (var path = Round(badge, Px(11)))
+                using (var b = new SolidBrush(Color.FromArgb(30, CardStatusColor(st))))
+                    g.FillPath(b, path);
+                using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(CardStatusColor(st)))
+                    TextRenderer.DrawText(g, stText, f, badge, CardStatusColor(st),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                // 头部按钮：查看对话 / 补充需求 / 确认交接
+                DrawHeaderButton(g, CardDialogRect(card), "查看对话", Color.FromArgb(64, 64, 74), Color.White);
+                DrawHeaderButton(g, CardSuppRect(card), "补充需求", Color.FromArgb(64, 64, 74), Color.White);
+                if (st == 2)
+                {
+                    string next = NextRoleName();
+                    DrawHeaderButton(g, CardConfirmRect(card), "确认 → 交给「" + next + "」", Orange, Color.White);
+                }
+
+                // 结果摘要行（本轮该 agent 最近一次输出）
+                string sum = CardSummary(k);
+                if (sum.Length > 0)
+                {
+                    using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+                    using (var b = new SolidBrush(Color.FromArgb(120, 120, 128)))
+                        g.DrawString("摘要：" + sum, f, b,
+                            new RectangleF(card.X + Px(14), card.Y + Px(CardHeaderH), card.Width - Px(28), Px(24)));
+                }
+
+                // 缩略图没注册成时给个占位说明
+                if (_thumbs[k] == IntPtr.Zero)
+                {
+                    Rectangle t = new Rectangle(card.X, card.Y + Px(CardHeaderH + 24), card.Width, card.Height - Px(CardHeaderH + 26));
+                    using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
+                    using (var b = new SolidBrush(Color.FromArgb(160, 160, 168)))
+                        TextRenderer.DrawText(g, "窗口就绪后这里会显示实时画面", f, t, Color.FromArgb(160, 160, 168),
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+
+                // 右下角提示
+                using (var f = new Font("微软雅黑", Px(11), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(Color.FromArgb(150, 150, 158)))
+                    g.DrawString("点击卡片打开对话", f, b, card.Right - Px(140), card.Bottom - Px(24));
+            }
+
+            // 右侧轮次面板
+            DrawRoundPanel(g);
+
+            if (inputPhase) UpdateTaskBox(rr[0]);
+
+            // 底部操作带（按阶段出按钮）
+            var labels = new List<string>();
+            var acts = new List<Action>();
+            BuildBottomBar(labels, acts);
+            if (labels.Count > 0)
+            {
+                Rectangle[] btns = BottomButtons(labels.Count);
+                for (int i = 0; i < labels.Count; i++)
+                    DrawHeaderButton(g, btns[i], labels[i], i == 0 ? Orange : Color.FromArgb(64, 64, 74), Color.White, Px(16));
+            }
+
+            // 自动接力开关（仅运行中有意义）
+            if (running)
+            {
+                Rectangle ar = PipeAutoRect();
+                bool auto = _pipe.Config.AutoAdvance;
+                using (var path = Round(ar, Px(10)))
+                using (var b = new SolidBrush(auto ? Orange : Color.FromArgb(238, 238, 241)))
+                    g.FillPath(b, path);
+                using (var f = new Font("微软雅黑", Px(13), auto ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel))
+                    TextRenderer.DrawText(g, auto ? "自动接力：开" : "自动接力：关", f, ar,
+                        auto ? Color.White : Color.FromArgb(120, 120, 128),
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+
+            // 状态行
             using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var b = new SolidBrush(Color.FromArgb(170, 170, 176)))
-                g.DrawString("每步完成后复制应用里的回复，再点下一步", f, b, x, br.Bottom + Px(16));
+            using (var b = new SolidBrush(Color.FromArgb(150, 150, 158)))
+            {
+                string tip = _pipe != null && _pipe.Note.Length > 0 ? _pipe.Note : "";
+                if (_pipe != null && _pipe.Phase == PipePhase.Failed && _pipe.FailedReason.Length > 0)
+                    tip = "失败原因：" + _pipe.FailedReason;
+                g.DrawString(tip, f, b, rr[0].X, Height - Px(24));
+            }
+        }
+
+        private void DrawHeaderButton(Graphics g, Rectangle r, string text, Color bg, Color fg)
+        {
+            DrawHeaderButton(g, r, text, bg, fg, Px(13));
+        }
+
+        private void DrawHeaderButton(Graphics g, Rectangle r, string text, Color bg, Color fg, int fontPx)
+        {
+            using (var path = Round(r, Px(13)))
+            using (var b = new SolidBrush(bg))
+                g.FillPath(b, path);
+            using (var f = new Font("微软雅黑", fontPx, FontStyle.Bold, GraphicsUnit.Pixel))
+                TextRenderer.DrawText(g, text, f, r, fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+
+        // 任务需求输入框（输入阶段盖在卡 1 上）
+        private void DrawTaskInput(Graphics g, Rectangle card)
+        {
+            using (var path = Round(card, Px(12)))
+            using (var b = new SolidBrush(Color.FromArgb(250, 250, 252)))
+                g.FillPath(b, path);
+            using (var path = Round(card, Px(12)))
+            using (var pen = new Pen(Orange, Px(2)))
+                g.DrawPath(pen, path);
+            using (var f = new Font("微软雅黑", Px(17), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(TextBlack))
+                g.DrawString("① 拆解 · 本次任务需求", f, b, card.X + Px(16), card.Y + Px(12));
+            using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(130, 130, 138)))
+                g.DrawString("填好需求后点「开始协同」。下面两张卡是执行与自检，会在流程中自动接手。",
+                    f, b, card.X + Px(16), card.Y + Px(40));
+            Rectangle sr = TaskStartRect(card);
+            DrawHeaderButton(g, sr, "开始协同", Orange, Color.White, Px(16));
+        }
+
+        private Rectangle TaskStartRect(Rectangle card)
+        {
+            return new Rectangle(card.Right - Px(180), card.Bottom - Px(60), Px(160), Px(44));
+        }
+
+        private Rectangle TaskBoxRect(Rectangle card)
+        {
+            return new Rectangle(card.X + Px(16), card.Y + Px(70), card.Width - Px(32), card.Height - Px(150));
+        }
+
+        private void UpdateTaskBox(Rectangle card)
+        {
+            if (_taskBox == null)
+            {
+                _taskBox = new TextBox();
+                _taskBox.Multiline = true;
+                _taskBox.ScrollBars = ScrollBars.Vertical;
+                _taskBox.BorderStyle = BorderStyle.FixedSingle;
+                _taskBox.BackColor = Color.White;
+                _taskBox.ForeColor = Color.FromArgb(24, 24, 28);
+                _taskBox.Font = new Font("Microsoft YaHei UI", 10.5f);
+                Controls.Add(_taskBox);
+            }
+            Rectangle r = TaskBoxRect(card);
+            if (!_taskBox.Visible) _taskBox.Visible = true;
+            if (_taskBox.Bounds != r) _taskBox.Bounds = r;
+            _taskBox.BringToFront();
+        }
+
+        // 右侧轮次面板：当前轮次 / 已完成轮数 / 当前阶段 / 各轮结论
+        private void DrawRoundPanel(Graphics g)
+        {
+            Rectangle p = RoundPanelRect();
+            using (var path = Round(p, Px(12)))
+            using (var bg = new SolidBrush(Color.FromArgb(243, 243, 245)))
+                g.FillPath(bg, path);
+            using (var path = Round(p, Px(12)))
+            using (var pen = new Pen(Color.FromArgb(224, 224, 228)))
+                g.DrawPath(pen, path);
+
+            int x = p.X + Px(16), y = p.Y + Px(14);
+            using (var f = new Font("微软雅黑", Px(15), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(TextBlack))
+            {
+                g.DrawString("当前轮次：第 " + (_pipe != null ? _pipe.CurrentRoundNo : 0) + " 轮", f, b, x, y);
+                y += Px(26);
+            }
+            using (var f = new Font("微软雅黑", Px(13), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(110, 110, 118)))
+            {
+                g.DrawString("已完成：" + (_pipe != null ? _pipe.CompletedRounds : 0) + " 轮", f, b, x, y); y += Px(22);
+                string ph = _pipe != null ? _pipe.PhaseName : "未开始";
+                Color pc = _pipe != null && _pipe.Running ? Orange : Color.FromArgb(110, 110, 118);
+                using (var pb = new SolidBrush(pc))
+                {
+                    g.DrawString("当前阶段：" + ph, f, pb, x, y); y += Px(22);
+                }
+                string st = "状态：";
+                if (_pipe == null || _pipe.Phase == PipePhase.Idle) st += "等待输入需求";
+                else if (_pipe.Phase == PipePhase.RoundDone) st += "本轮完成，等待你确认";
+                else if (_pipe.Phase == PipePhase.Stopped) st += "已停止，可恢复";
+                else if (_pipe.Phase == PipePhase.Failed) st += "失败，可重试";
+                else if (_pipe.Phase == PipePhase.Finished) st += "已结束，记录可查看";
+                else if (_pipe.ConfirmPending) st += "步完成，等待确认交接";
+                else st += "进行中";
+                g.DrawString(st, f, b, x, y);
+            }
+
+            // 分隔线
+            using (var pen = new Pen(Color.FromArgb(224, 224, 228)))
+                g.DrawLine(pen, p.X + Px(12), p.Y + Px(112), p.Right - Px(12), p.Y + Px(112));
+
+            using (var f = new Font("微软雅黑", Px(13), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b = new SolidBrush(Color.FromArgb(120, 120, 128)))
+                g.DrawString("各轮结论（点击查看）", f, b, x, p.Y + Px(122));
+
+            if (_pipe == null || _pipe.Session == null || _pipe.Session.Rounds.Count == 0)
+            {
+                using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(Color.FromArgb(160, 160, 168)))
+                    g.DrawString("暂无已完成轮次", f, b, x, p.Y + Px(150));
+                return;
+            }
+
+            for (int i = 0; i < _pipe.Session.Rounds.Count; i++)
+            {
+                RoundRecord r = _pipe.Session.Rounds[i];
+                Rectangle it = RoundItemRect(i);
+                if (it.Bottom > p.Bottom - Px(8)) break;   // 超出面板不画
+                using (var path = Round(it, Px(8)))
+                using (var bg = new SolidBrush(i == _hoverRound ? Color.FromArgb(255, 243, 234) : Color.FromArgb(250, 250, 252)))
+                    g.FillPath(bg, path);
+                string sum = (r.Alignment ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+                if (sum.Length > 34) sum = sum.Substring(0, 34) + "…";
+                using (var f = new Font("微软雅黑", Px(13), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(TextBlack))
+                    g.DrawString("第 " + r.Number + " 轮 · " + r.FinishedAt.ToString("HH:mm"), f, b, it.X + Px(10), it.Y + Px(6));
+                using (var f = new Font("微软雅黑", Px(12), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var b = new SolidBrush(Color.FromArgb(120, 120, 128)))
+                    g.DrawString(sum, f, b, it.X + Px(10), it.Y + Px(28));
+            }
+        }
+
+        // ---------- 底部操作带：按钮由阶段唯一决定，绘制与点击共用同一构建器 ----------
+
+        private void BuildBottomBar(List<string> labels, List<Action> acts)
+        {
+            if (_pipe == null) return;
+            switch (_pipe.Phase)
+            {
+                case PipePhase.Decompose:
+                case PipePhase.Execute:
+                case PipePhase.SelfCheck:
+                case PipePhase.Align:
+                    if (_pipe.ConfirmPending)
+                    {
+                        labels.Add("确认交给「" + NextRoleName() + "」");
+                        acts.Add(Handoff);
+                    }
+                    else
+                    {
+                        labels.Add("手动推进（复制回复后点）");
+                        acts.Add(CaptureManual);
+                    }
+                    labels.Add("停止");
+                    acts.Add(delegate
+                    {
+                        _pipe.Stop();
+                        Toast.Show("已停止，点「恢复」继续当前步");
+                        Invalidate();
+                    });
+                    break;
+                case PipePhase.RoundDone:
+                    labels.Add("继续下一轮");
+                    acts.Add(NextRound);
+                    labels.Add("补充需求后继续");
+                    acts.Add(delegate
+                    {
+                        OpenDialog(0);
+                        Toast.Show("补充发送后，再点「继续下一轮」——会带上你的新要求");
+                    });
+                    labels.Add("结束协同");
+                    acts.Add(FinishFlow);
+                    break;
+                case PipePhase.Stopped:
+                    labels.Add("恢复当前步");
+                    acts.Add(ResumeFlow);
+                    labels.Add("结束协同");
+                    acts.Add(FinishFlow);
+                    break;
+                case PipePhase.Failed:
+                    labels.Add("重试当前步");
+                    acts.Add(RetryFlow);
+                    labels.Add("结束协同");
+                    acts.Add(FinishFlow);
+                    break;
+                case PipePhase.Finished:
+                    labels.Add("再来一次");
+                    acts.Add(delegate
+                    {
+                        _pipe = new Pipeline(PipeConfig.Load());
+                        Invalidate();
+                    });
+                    break;
+            }
+        }
+
+        private Rectangle[] BottomButtons(int n)
+        {
+            int bw = Px(200), bh = Px(46), gap = Px(14);
+            int cardsW = Width - _sideW - Px(372);
+            int total = n * bw + (n - 1) * gap;
+            int x0 = _sideW + Math.Max(Px(20), (cardsW - total) / 2);
+            var r = new Rectangle[n];
+            for (int i = 0; i < n; i++) r[i] = new Rectangle(x0 + i * (bw + gap), Height - Px(76), bw, bh);
+            return r;
+        }
+
+        // ---------- 选角色视图（进入协同后第一步） ----------
+
+        private void DrawPipeline(Graphics g)
+        {
+            // 现在协同只有这一个中间态：选角色。选满三个立即 StartSynergy 进卡片流。
+            using (var f0 = new Font("微软雅黑", Px(34), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var b0 = new SolidBrush(TextBlack))
+                g.DrawString("点侧栏选三个应用", f0, b0, _sideW + Px(80), Height * 0.18f);
+            using (var f1 = new Font("微软雅黑", Px(18), FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var b1 = new SolidBrush(Color.FromArgb(120, 120, 128)))
+            {
+                g.DrawString("已选 " + _roles.Count + " / 3　·　第 1 个 = 需求拆解　第 2 个 = 任务执行　第 3 个 = 完成自检",
+                    f1, b1, _sideW + Px(80), Height * 0.18f + Px(52));
+                g.DrawString("拆解和最终对齐都由第 1 个应用承担（对齐属于当前轮，不算新轮）",
+                    f1, b1, _sideW + Px(80), Height * 0.18f + Px(84));
+            }
+            int yy = (int)(Height * 0.36f);
+            for (int k = 0; k < _roles.Count; k++)
+            {
+                if (_roles[k] < 0 || _roles[k] >= _agents.Count) continue;
+                using (var f2 = new Font("微软雅黑", Px(20), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var b2 = new SolidBrush(Orange))
+                    g.DrawString((k + 1) + "  " + RoleNames[k] + " ← " + _agents[_roles[k]].Name, f2, b2, _sideW + Px(80), yy);
+                yy += Px(40);
+            }
         }
 
         private void DrawModeChooser(Graphics g)
@@ -937,7 +1644,15 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 g.FillRectangle(b, 0, 0, _sideW, Height);
 
             if (Width - _sideW < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
-            if (_mode == 1) { if (_tiled) DrawSynergy(g); else DrawPipeline(g); return; }
+            // 输入框的显隐跟协同状态走，避免离开协同模式后残留文本框
+            bool showTask = _mode == 1 && _tiled && !_picking && (_pipe == null || _pipe.Phase == PipePhase.Idle);
+            if (_taskBox != null && _taskBox.Visible != showTask) _taskBox.Visible = showTask;
+            if (_mode == 1)
+            {
+                if (_picking) DrawPipeline(g);
+                else DrawSynergy(g);
+                return;
+            }
 
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
@@ -948,7 +1663,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 using (var br = new SolidBrush(Color.FromArgb(20, 0, 0, 0)))
                     g.DrawString("选择你的工作模式", f, br,
                         new RectangleF(r.X, r.Y + i * 1.2f, r.Width, r.Height), sf);
-                g.DrawString("选择你的工作模式", f, new SolidBrush(Color.FromArgb(24, 24, 28)), r, sf);
+                using (var tb = new SolidBrush(Color.FromArgb(24, 24, 28)))
+                    g.DrawString("选择你的工作模式", f, tb, r, sf);
             }
 
             Rectangle ca, cb;
@@ -981,107 +1697,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                     selected ? Orange : Color.FromArgb(168, 168, 176), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
-        private void DrawEmpty(Graphics g)
-        {
-            if (_introT <= 0.15f) return;
-
-            string text = "开始工作";
-            int em = Px(228);
-
-            GraphicsPath path = null;
-            FontFamily fam = null;
-            try
-            {
-                try { fam = new FontFamily("等线"); }
-                catch
-                {
-                    try { fam = new FontFamily("微软雅黑"); }
-                    catch { fam = new FontFamily("Microsoft YaHei UI"); }
-                }
-
-                path = new GraphicsPath();
-                path.AddString(text, fam, (int)FontStyle.Bold, em, new PointF(0, 0), StringFormat.GenericTypographic);
-
-                RectangleF b = path.GetBounds();
-                float cx = _sideW + (Math.Max(1, Width - _sideW)) / 2f;
-                float cy = Height / 2f;
-                using (var mtx = new Matrix())
-                {
-                    mtx.Translate(cx - (b.X + b.Width / 2f), cy - (b.Y + b.Height / 2f));
-                    path.Transform(mtx);
-                }
-
-                // 1) 辉光：黑底上看不见黑阴影，用放大的淡橙色叠出光晕
-                for (int s = 3; s >= 1; s--)
-                {
-                    using (var gl = (GraphicsPath)path.Clone())
-                    using (var m = new Matrix())
-                    {
-                        m.Translate(cx, cy);
-                        m.Scale(1f + s * 0.022f, 1f + s * 0.022f);
-                        m.Translate(-cx, -cy);
-                        gl.Transform(m);
-                        using (var br = new SolidBrush(Color.FromArgb(16, 255, 122, 26)))
-                            g.FillPath(br, gl);
-                    }
-                }
-
-                // 2) 挤出：往下复制几层暗橙，做出字的厚度
-                for (int i = 5; i >= 1; i--)
-                {
-                    using (var ex = (GraphicsPath)path.Clone())
-                    {
-                        using (var m = new Matrix())
-                        {
-                            m.Translate(0, i * (em * 0.024f));
-                            ex.Transform(m);
-                        }
-                        using (var br = new SolidBrush(Color.FromArgb(255, 104, 40, 2)))
-                            g.FillPath(br, ex);
-                    }
-                }
-
-                // 3) 主体：上亮下暗的竖向渐变
-                RectangleF gb = path.GetBounds();
-                var rect = new RectangleF(gb.X, gb.Y, gb.Width, gb.Height);
-                using (var lg = new LinearGradientBrush(rect, Color.White, Color.Black, LinearGradientMode.Vertical))
-                {
-                    lg.InterpolationColors = new ColorBlend
-                    {
-                        Colors = new[]
-                        {
-                            Color.FromArgb(255, 205, 138),
-                            Color.FromArgb(255, 126, 28),
-                            Color.FromArgb(206, 78, 6)
-                        },
-                        Positions = new[] { 0f, 0.5f, 1f }
-                    };
-                    g.FillPath(lg, path);
-                }
-
-                // 4) 顶部高光，加一层塑料感
-                Region old = g.Clip;
-                g.SetClip(path, CombineMode.Intersect);
-                var hl = new RectangleF(gb.X, gb.Y, gb.Width, gb.Height * 0.46f);
-                using (var hb = new LinearGradientBrush(hl,
-                    Color.FromArgb(130, 255, 244, 220), Color.FromArgb(0, 255, 244, 220),
-                    LinearGradientMode.Vertical))
-                {
-                    g.FillRectangle(hb, hl);
-                }
-                g.Clip = old;
-
-                // 5) 一条细亮边强化轮廓
-                using (var pen = new Pen(Color.FromArgb(95, 255, 202, 146), Math.Max(1.5f, em * 0.011f)))
-                    g.DrawPath(pen, path);
-            }
-            catch { }
-            finally
-            {
-                if (path != null) path.Dispose();
-                if (fam != null) fam.Dispose();
-            }
-        }
         private void DrawTile(Graphics g, Agent a, Rectangle r)
         {
             int sz = Px(36);
@@ -1134,17 +1749,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
         }
 
-        private void DrawChevron(Graphics g, Rectangle r, bool hot)
-        {
-            int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, a = Px(6);
-            using (var pen = new Pen(hot ? Orange : TextFaint, Math.Max(1.5f, Px(2) * 0.9f)))
-            {
-                pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
-                g.DrawLine(pen, cx + a / 2, cy - a, cx - a / 2, cy);
-                g.DrawLine(pen, cx - a / 2, cy, cx + a / 2, cy + a);
-            }
-        }
-
         private void DrawExit(Graphics g, Rectangle r, bool hot)
         {
             int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, a = Px(6);
@@ -1157,6 +1761,17 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         }
 
         // ---------- 交互 ----------
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // 协同模式聚焦应用时，Esc = 回到流程条（应用保持已选）
+            if (keyData == Keys.Escape && _mode == 1 && _focusIdx >= 0)
+            {
+                BackToPipeView();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
 
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -1195,7 +1810,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         {
             base.OnMouseMove(e);
 
-            if (_dockHidden)
+            if (DockGone)
             {
                 // 窗口滑到 x=-89，露在外面的是它右边的 3px
                 // 必须已经完全滑出才认热区：滑行途中窗口左移会让光标落进最后 4px，否则会自己叫回自己
@@ -1203,26 +1818,39 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 return;
             }
 
-            if (!_expanded)
-            {
-                bool hot = e.X <= Px(10);
-                if (hot != _hoverStrip) { _hoverStrip = hot; Invalidate(); }
-                if (hot) SetExpanded(true);
-                return;
-            }
-
             int idx = HitTest(e.Location);
-            bool col = CollapseRect().Contains(e.Location);
             bool ex = ExitRect().Contains(e.Location);
             bool ph = _agents.Count < 18 && PlusRect().Contains(e.Location);
-            if (idx != _hover || col != _hoverCollapse || ex != _hoverExit || ph != _plusHot)
+            // 协同态：卡片头部按钮 / 轮次条目 / 底部按钮 都给手型
+            int hoverRound = -1;
+            bool overCardBtn = false;
+            if (_mode == 1 && _tiled && _focusIdx < 0)
+            {
+                foreach (Rectangle card in TileRects())
+                {
+                    if (CardDialogRect(card).Contains(e.Location) ||
+                        CardSuppRect(card).Contains(e.Location) ||
+                        (_pipe != null && _pipe.ConfirmPending && CardConfirmRect(card).Contains(e.Location)))
+                    {
+                        overCardBtn = true;
+                        break;
+                    }
+                }
+                if (_pipe != null && _pipe.Session != null)
+                {
+                    for (int i = 0; i < _pipe.Session.Rounds.Count; i++)
+                        if (RoundItemRect(i).Contains(e.Location)) { hoverRound = i; break; }
+                }
+            }
+            bool interactive = idx >= 0 || ex || ph || overCardBtn || hoverRound >= 0;
+            if (idx != _hover || ex != _hoverExit || ph != _plusHot || hoverRound != _hoverRound)
             {
                 if (idx != _hover) { _hoverT = 0f; Kick(); }
                 _hover = idx;
-                _hoverCollapse = col;
                 _hoverExit = ex;
                 _plusHot = ph;
-                Cursor = (idx >= 0 || col || ex || ph) ? Cursors.Hand : Cursors.Default;
+                _hoverRound = hoverRound;
+                Cursor = interactive ? Cursors.Hand : Cursors.Default;
                 Invalidate();
             }
         }
@@ -1230,7 +1858,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
-            _hover = -1; _hoverCollapse = false; _hoverExit = false; _hoverStrip = false;
+            _hover = -1; _hoverExit = false;
             Cursor = Cursors.Default;
             Invalidate();
         }
@@ -1267,34 +1895,93 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
 
             if (e.Button != MouseButtons.Left) return;
-            if (!_expanded) { SetExpanded(true); return; }
             if (_shown < 0)
             {
                 Rectangle ca, cb;
                 CardRects(out ca, out cb);
                 if (ca.Contains(e.Location)) { ShowPipelineView(); return; }
+
+                // 协同：输入阶段（卡 1 是任务输入框）
+                bool inputPhase = _mode == 1 && _tiled && !_picking && (_pipe == null || _pipe.Phase == PipePhase.Idle);
+                if (inputPhase && _roles.Count > 0)
+                {
+                    Rectangle tr0 = TileRects()[0];
+                    if (TaskStartRect(tr0).Contains(e.Location)) { StartFromBox(); return; }
+                }
+
+                // 卡片流态：卡头按钮 → 整卡打开对话窗；右侧面板 → 轮次查看；底部 → 操作带
                 if (_mode == 1 && _tiled && _focusIdx < 0)
                 {
                     Rectangle[] tr = TileRects();
-                    for (int k = 0; k < 3; k++) if (tr[k].Contains(e.Location)) { FocusTile(k); return; }
+                    for (int k = 0; k < 3 && k < _roles.Count; k++)
+                    {
+                        if (tr[k].Contains(e.Location))
+                        {
+                            // 卡头按钮优先
+                            if (CardDialogRect(tr[k]).Contains(e.Location)) { OpenDialog(k); return; }
+                            if (CardSuppRect(tr[k]).Contains(e.Location)) { OpenDialog(k); return; }
+                            if (_pipe != null && _pipe.ConfirmPending && CardStatus(k) == 2 &&
+                                CardConfirmRect(tr[k]).Contains(e.Location))
+                            {
+                                Handoff();
+                                return;
+                            }
+                            OpenDialog(k);   // 整卡点击 = 打开该 Agent 的对话窗（不嵌入真实页面）
+                            return;
+                        }
+                    }
+
+                    // 各轮结论查看
+                    if (_pipe != null && _pipe.Session != null)
+                    {
+                        for (int i = 0; i < _pipe.Session.Rounds.Count; i++)
+                        {
+                            if (RoundItemRect(i).Contains(e.Location))
+                            {
+                                RoundViewer.Show(_pipe.Session.Rounds[i]);
+                                return;
+                            }
+                        }
+                    }
+
+                    // 底部操作带
+                    if (_pipe != null)
+                    {
+                        var labels = new List<string>();
+                        var acts = new List<Action>();
+                        BuildBottomBar(labels, acts);
+                        Rectangle[] btns = BottomButtons(labels.Count);
+                        for (int i = 0; i < labels.Count; i++)
+                        {
+                            if (!btns[i].Contains(e.Location)) continue;
+                            acts[i]();
+                            return;
+                        }
+                    }
+
+                    if (_pipe != null && _pipe.Running && PipeAutoRect().Contains(e.Location))
+                    {
+                        _pipe.Config.AutoAdvance = !_pipe.Config.AutoAdvance;
+                        Toast.Show(_pipe.Config.AutoAdvance ? "自动接力已开：步完成后直接交给下一个" : "自动接力已关：每步等你确认");
+                        if (_pipe.ConfirmPending && _pipe.Config.AutoAdvance) Handoff();
+                        Invalidate();
+                        return;
+                    }
                 }
-            if (_mode == 1 && PipeButtonRect().Contains(e.Location))
+
+                // 放大态：右侧窄条的小卡切换（点击当前卡 = 回卡片流）
+                if (_mode == 1 && _tiled && _focusIdx >= 0)
                 {
-                    if (_pipe != null && _pipe.Paused) { _pipe.Paused = false; _pipeAt = DateTime.Now; _pipe.Note = "继续"; Invalidate(); return; }
-                    PipeAdvance();
-                    return;
-                }
-                if (_mode == 1 && PipeResetRect().Contains(e.Location))
-                {
-                    if (_pipe != null) { string keep = _pipe.Task; _pipe = new Pipeline(PipeConfig.Load()); _pipe.Task = keep; }
-                    Invalidate();
-                    return;
-                }
-                if (cb.Contains(e.Location))
-                {
-                    _mode = 0;
-                    Invalidate();
-                    return;
+                    for (int k = 0; k < 3 && k < _roles.Count; k++)
+                    {
+                        if (ZoomMiniRect(k).Contains(e.Location))
+                        {
+                            if (k == _focusIdx) { BackToPipeView(); return; }
+                            BackToPipeView();
+                            FocusTile(k);
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -1306,7 +1993,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 return;
             }
             if (ExitRect().Contains(e.Location)) { HideToBackground(); return; }
-            if (CollapseRect().Contains(e.Location)) { SetExpanded(false); return; }
             if (_agents.Count < 18 && PlusRect().Contains(e.Location)) { ShowAdd(); return; }
 
             int idx2 = HitTest(e.Location);
@@ -1323,8 +2009,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
             return -1;
         }
-
-        // ---------- 滑出 / 滑入 ----------
 
         // ---------- 开屏预加载 ----------
 
@@ -1393,8 +2077,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void HideToBackground()
         {
-            if (_hiddenToTray) return;
-            _hiddenToTray = true;
+            if (DockGone) return;
+            _dock = DockState.Background;
             foreach (int i in _chosen)
             {
                 IntPtr h;
@@ -1405,7 +2089,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                         Host.Hide(h);
                 }
             }
-            _dockHidden = true;
             Kick();
             SaveSessionNow();
             Program.Log("to background");
@@ -1441,6 +2124,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
         private void HideTick(object sender, EventArgs e)
         {
+            // 协同流水线：某步超过时限没有动作就暂停，状态不丢
             if (_mode == 1 && _pipe != null && _pipe.Running && !_pipe.Paused
                 && (DateTime.Now - _pipeAt).TotalMinutes >= _pipe.Config.StepTimeoutMinutes)
             {
@@ -1448,19 +2132,12 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 _pipe.Note = "已暂停：超过 " + _pipe.Config.StepTimeoutMinutes + " 分钟没有动作";
                 Invalidate();
             }
-
-            if (_hideDue == DateTime.MaxValue) return;
-            if (DateTime.Now < _hideDue) return;
-            _hideDue = DateTime.MaxValue;
-            HideDock();
         }
 
         private void ShowDock()
         {
-            _hideDue = DateTime.MaxValue;
-            bool was = _dockHidden || _hiddenToTray;
-            _dockHidden = false;
-            _hiddenToTray = false;
+            bool was = DockGone;
+            _dock = DockState.Visible;
             if (was) { ReplayDeck(); Kick(); }
 
             // 窗口藏起来的时候应用也被隐藏了，唤回时要一起恢复
@@ -1476,17 +2153,9 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Invalidate();
         }
 
-        private void HideDock()
-        {
-            _hideDue = DateTime.MaxValue;
-            if (_dockHidden) return;
-            _dockHidden = true;
-            Kick();
-        }
-
         private void ToggleDock()
         {
-            if (_dockHidden || _hiddenToTray) ShowDock(); else HideToBackground();
+            if (DockGone) ShowDock(); else HideToBackground();
         }
 
         // 每次唤出都重放一次"堆叠散开"
@@ -1497,17 +2166,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 _y[_order[k]] = ItemTopPx + k * 6f;
                 _delay[_order[k]] = k * 0.038f;
             }
-        }
-
-        private void ScheduleHide(int ms)
-        {
-            if (_shown < 0) return;
-            _hideDue = DateTime.Now.AddMilliseconds(ms);
-        }
-
-        public void SetExpanded(bool value)
-        {
-            // 侧栏固定展开：不再收起，右侧应用区域也就不会跟着移动
         }
 
         // ---------- 名额与切换 ----------
@@ -1613,6 +2271,8 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             Config.SaveCustom();
             Icons.Forget(gone.Id);
             RemapAfterRemove(i);
+            // 被移除的正是协同角色：平铺凑不齐三个了，退出平铺但保留其余应用
+            if (_tiled && _roles.Count < 3) AbandonSynergyKeepApps();
             Toast.Show("已移除「" + gone.Name + "」");
             Invalidate();
         }
@@ -1626,6 +2286,27 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             Rekey(_windows, removed);
             Rekey(_pids, removed);
+
+            // _dead：健康检查的连续未命中计数，键同样是 agent 索引
+            var dead = new Dictionary<int, int>();
+            foreach (KeyValuePair<int, int> kv in _dead) dead[kv.Key > removed ? kv.Key - 1 : kv.Key] = kv.Value;
+            _dead.Clear();
+            foreach (KeyValuePair<int, int> kv in dead) _dead[kv.Key] = kv.Value;
+
+            // _roles：协同角色也是 agent 索引；_focusIdx 是角色在 _roles 里的位置
+            for (int k = _roles.Count - 1; k >= 0; k--)
+            {
+                if (_roles[k] == removed)
+                {
+                    _roles.RemoveAt(k);
+                    if (_focusIdx == k) _focusIdx = -1;
+                    else if (_focusIdx > k) _focusIdx--;
+                }
+                else if (_roles[k] > removed) _roles[k]--;
+            }
+
+            if (_pendingIdx == removed) { _pendingIdx = -1; _poll.Stop(); }
+            else if (_pendingIdx > removed) _pendingIdx--;
 
             if (_shown > removed) _shown--;
             else if (_shown == removed) _shown = -1;
@@ -1656,7 +2337,13 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 if (_roles.Contains(i)) _roles.Remove(i);
                 else if (_roles.Count < 3) _roles.Add(i);
                 else { Toast.Show("最多三个角色，先点掉一个"); return; }
-                if (_roles.Count == 3) { _picking = false; StartSynergy(); Toast.Show("协同已启动，三个窗口已平铺"); }
+                if (_roles.Count == 3)
+                {
+                    _picking = false;
+                    StartSynergy();
+                    // 名额不够时 StartSynergy 会把自己打回挑选状态，别误报成功
+                    if (_tiled) Toast.Show("三个角色就绪：在上方输入任务需求，点「开始协同」");
+                }
                 Invalidate();
                 return;
             }
@@ -1742,10 +2429,21 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
                 _pendingIdx = -1;
                 _chosen.Remove(i);
                 Toast.Show("「" + a.Name + "」启动失败");
+                FailSynergy("「" + a.Name + "」启动失败：" + ex.Message);
                 Invalidate();
                 return;
             }
             _poll.Start();
+        }
+
+        // 协同模式下某个应用启动失败：流程停住等用户重试/结束，绝不在失败后悄悄继续
+        private void FailSynergy(string reason)
+        {
+            if (_mode == 1 && _tiled && _pipe != null && _pipe.Running)
+            {
+                _pipe.Fail(reason);
+                Program.Log("synergy failed: " + reason);
+            }
         }
 
         private void PollTick(object sender, EventArgs e)
@@ -1765,6 +2463,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
                 Toast.Show("「" + _agents[i].Name + "」启动超时");
                 Program.Log("TIMEOUT " + _agents[i].Id);
+                FailSynergy("「" + _agents[i].Name + "」启动超时，未找到它的窗口");
                 Invalidate();
             }
         }
@@ -1776,15 +2475,35 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             uint pid;
             Native.GetWindowThreadProcessId(hwnd, out pid);
+            Program.Log("found " + _agents[i].Id + " hwnd=" + hwnd + " pid=" + pid +
+                        " title='" + Native.Title(hwnd) + "' cls=" + Native.ClassName(hwnd));
 
             // 协同模式：不抢主视图，交给 TileTick 摆到自己的栏里
             if (_tiled)
             {
+                // 平铺模式的缩略图注册的就是这个句柄，选错窗口三栏就"抓的不是屏幕上那个"。
+                // Find 允许不可见的后备窗口兜底，这里必须等到可见的那个。
+                if (!Native.IsWindowVisible(hwnd))
+                {
+                    IntPtr better = Host.FindVisible(_agents[i], DateTime.MinValue);
+                    if (better != IntPtr.Zero) { hwnd = better; Native.GetWindowThreadProcessId(hwnd, out pid); }
+                }
                 _pids[i] = (int)pid;
                 _windows[i] = hwnd;
                 _shown = -1;
                 ApplyBounds();
                 for (int k = 0; k < _roles.Count; k++) if (_roles[k] == i) ParkOffscreen(k, true);
+                // 会话进行中：窗口（重新）就绪 → 当前步提示词重新就位，防止用户不知道从哪继续。
+                // 幂等：只是把已有提示词再放进剪贴板，不产生任何重复副作用
+                if (_pipe != null && _pipe.Running && !_pipe.ConfirmPending)
+                {
+                    string prompt = _pipe.CurrentPrompt();
+                    if (prompt.Length > 0)
+                    {
+                        PipeCopy(prompt);
+                        Toast.Show("「" + _agents[i].Name + "」窗口就绪，提示词已在剪贴板");
+                    }
+                }
                 SaveSessionNow();
                 Invalidate();
                 return;
@@ -1796,6 +2515,7 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
                 MarkSplash(_agents[i].Id, "失败", 3);
                 Toast.Show("「" + _agents[i].Name + "」以管理员权限运行，无法接管");
+                FailSynergy("「" + _agents[i].Name + "」以管理员权限运行，无法接管窗口");
                 Invalidate();
                 return;
             }
@@ -1898,15 +2618,6 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             }
         }
 
-        private void RepositionShown()
-        {
-            IntPtr h;
-            if (_shown < 0 || !_windows.TryGetValue(_shown, out h) || !Native.IsWindow(h)) return;
-            Rectangle r = ContentRect();
-            Native.SetWindowPos(h, Handle, r.X, r.Y, r.Width, r.Height,
-                Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
-        }
-
         // ---------- 生命周期 ----------
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -1922,6 +2633,9 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
             _poll.Stop(); _health.Stop(); _anim.Stop(); _restoreTimer.Stop();
             SaveSessionNow();
 
+            // 未结束的协同会话：结束并落盘，记录不丢
+            EndSessionIfAny();
+
             foreach (int i in new List<int>(_chosen))
             {
                 int pid;
@@ -1934,9 +2648,28 @@ Rectangle scr = Screen.PrimaryScreen.WorkingArea;
 
             IntPtr h;
             if (_shown >= 0 && _windows.TryGetValue(_shown, out h)) Host.Hide(h);
+            PipeReturnButton.Hide();
+            UnregisterThumbs();
             Host.ReleaseAll();
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); _tray = null; }
             base.OnFormClosing(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // 自绘用的字体/画笔/画刷不在 components 容器里，不会自动释放
+                if (_fName != null) _fName.Dispose();
+                if (_bSide != null) _bSide.Dispose();
+                if (_bOrange != null) _bOrange.Dispose();
+                if (_pLine != null) _pLine.Dispose();
+                if (_pOrange != null) _pOrange.Dispose();
+                if (_pRing != null) _pRing.Dispose();
+                _poll.Dispose(); _health.Dispose(); _anim.Dispose();
+                _hideTimer.Dispose(); _restoreTimer.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

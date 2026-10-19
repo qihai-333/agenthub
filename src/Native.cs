@@ -92,6 +92,7 @@ namespace AgentHub
 
         [DllImport("user32.dll")]
         public static extern bool IsIconic(IntPtr h);
+        [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
 
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -178,7 +179,7 @@ namespace AgentHub
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
 
-        [DllImport("kernel32.dll")]
+        [DllImport("kernel32.dll", SetLastError = true)]
         public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
 
         [DllImport("kernel32.dll")]

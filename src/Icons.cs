@@ -34,7 +34,11 @@ namespace AgentHub
 
         public static void Forget(string id)
         {
-            if (id != null) _icons.Remove(id);
+            if (id != null)
+            {
+                _icons.Remove(id);
+                _darkCache.Remove(id);   // 图标换了，深色底衬的判定也要重算
+            }
         }
 
         private static Bitmap Extract(Agent a)

@@ -147,10 +147,5 @@ namespace AgentHub
             m.Show();
             m.Activate();
         }
-
-        public static void ShowAt(Point screen, string label, Action action)
-        {
-            ShowAt(screen, new string[] { label }, new Action[] { action });
-        }
     }
 }

@@ -20,5 +20,8 @@ shots/
 *.suo
 .vs/
 
+# 本地代理工作区数据
+.workbuddy/
+
 # 打包产物
 dist/

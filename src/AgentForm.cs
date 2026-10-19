@@ -163,6 +163,18 @@ namespace AgentHub
             if (name.Length == 0) { MessageBox.Show("请填写名称", "添加应用"); return; }
             if (path.Length == 0) { MessageBox.Show("请选择窗口，或填写程序路径", "添加应用"); return; }
 
+            // 路径本机不存在时不拦死（可能在可移动磁盘上），但给个明确的警告
+            bool link = path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                        path.EndsWith(".url", StringComparison.OrdinalIgnoreCase);
+            bool exists;
+            try { exists = link || File.Exists(path); }
+            catch { exists = false; }
+            if (!exists)
+            {
+                if (MessageBox.Show("找不到这个文件：\r\n" + path + "\r\n\r\n仍然要添加吗？",
+                        "添加应用", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            }
+
             var a = _editing ?? new Agent();
             a.Name = name;
             a.Short = name.Length > 2 ? name.Substring(0, 2) : name;

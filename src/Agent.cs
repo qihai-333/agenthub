@@ -18,7 +18,6 @@ namespace AgentHub
         public string Proc { get; set; }
         public string Title { get; set; }
         public string Frame { get; set; }
-        public bool KeepAlive { get; set; }
         public bool Custom { get; set; }
 
         public bool OffsetFrame
@@ -66,7 +65,8 @@ namespace AgentHub
 
         public static string SessionPath
         {
-            get { return System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "session.json"); }
+            // 会话状态是运行期数据，跟实例走：不同 --config 的实例互不覆盖
+            get { return System.IO.Path.Combine(Program.DataDir, "session.json"); }
         }
 
         public static void LoadSession(out List<string> chosen, out string shown, out List<string> order)
@@ -177,18 +177,6 @@ namespace AgentHub
             // 别人的机器上这些路径不存在，硬编码一堆失效条目只会更迷惑。
             // 没有配置时从空白开始，用侧栏的「+」自己添加。
             return new List<Agent>();
-        }
-
-        private static Agent Make(string id, string name, string sh, string kind, string exe, string proc)
-        {
-            var a = new Agent();
-            a.Id = id;
-            a.Name = name;
-            a.Short = sh;
-            a.Kind = kind;
-            a.Exe = exe;
-            a.Proc = proc;
-            return a;
         }
     }
 }
