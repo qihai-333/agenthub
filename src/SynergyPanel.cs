@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -317,6 +317,21 @@ namespace AgentHub
             };
             info.Controls.Add(infoT);
             info.Controls.Add(_lbNote);
+            // 切换模式：协同面板自带这条右侧栏，所以入口也放在这里（普通工作站那条栏在协同模式下不显示）
+            var btnSwitch = new Button
+            {
+                Text = "切换模式",
+                Dock = DockStyle.Bottom,
+                Height = 34,
+                FlatStyle = FlatStyle.System,
+                Margin = new Padding(0, 8, 0, 0)
+            };
+            btnSwitch.Click += delegate
+            {
+                var sh = FindForm() as Shell;
+                if (sh != null) sh.SwitchModeFromPanel();
+            };
+            info.Controls.Add(btnSwitch);
             side.Controls.Add(info, 0, 0);
 
             var gbHis = new GroupBox { Text = "历史轮次（双击查看明细）", Dock = DockStyle.Fill };
