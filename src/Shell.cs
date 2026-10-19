@@ -1715,7 +1715,7 @@ namespace AgentHub
 
             Rectangle ca, cb;
             CardRects(out ca, out cb);
-            DrawModeCard(g, ca, "多 agent 协同模式", "拆解 → 编码 → 审查，三个 agent 接力", _mode == 1);
+            DrawModeCard(g, ca, "多 agent 协同模式", "拆解 → 执行 → 自检 → 对齐，三个 agent 接力", _mode == 1);
             DrawModeCard(g, cb, "普通工作站模式", "一次专注一个，切换即换", _mode == 0);
         }
 
