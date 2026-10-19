@@ -229,7 +229,18 @@ namespace AgentHub
             catch { }
             return v != 0;
         }
+        // 临时摘掉/恢复 WS_EX_NOACTIVATE：输入法需要窗口能真正保持前台
+        public const int WS_EX_NOACTIVATE = 0x08000000;
+
+        public static void SetNoActivate(IntPtr h, bool on)
+        {
+            try
+            {
+                int ex = GetWindowLong(h, GWL_EXSTYLE);
+                int want = on ? (ex | WS_EX_NOACTIVATE) : (ex & ~WS_EX_NOACTIVATE);
+                if (want != ex) SetWindowLong(h, GWL_EXSTYLE, want);
+            }
+            catch { }
+        }
     }
 }
-
-

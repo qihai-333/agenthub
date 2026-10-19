@@ -667,6 +667,16 @@ namespace AgentHub
         private TextBox _taskBox;
 
         // 鼠标落点是否在可输入控件上（输入法需要活动窗口）
+        private bool AnyTextFocused(Control root)
+        {
+            foreach (Control c in root.Controls)
+            {
+                if (c is TextBoxBase && c.Focused) return true;
+                if (AnyTextFocused(c)) return true;
+            }
+            return false;
+        }
+
         private bool OnInputAtCursor()
         {
             Point cp = PointToClient(Cursor.Position);
@@ -2209,7 +2219,9 @@ namespace AgentHub
             if (m.Msg == Native.WM_MOUSEACTIVATE)
             {
                 // 点在可输入控件上时必须允许窗口激活，否则输入法无法附着、无法候选上屏
-                m.Result = (IntPtr)(OnInputAtCursor() ? 1 : Native.MA_NOACTIVATE);
+                bool onInput = OnInputAtCursor();
+                if (onInput) Native.SetNoActivate(Handle, false);   // 必须摘掉 NOACTIVATE，否则输入法附着不上
+                m.Result = (IntPtr)(onInput ? 1 : Native.MA_NOACTIVATE);
                 return;
             }
             // 点任务栏图标：当作侧栏开关，不真的最小化
@@ -3014,6 +3026,8 @@ namespace AgentHub
 
         private void HealthTick(object sender, EventArgs e)
         {
+            // 输入框不在焦点上时恢复 NOACTIVATE，避免之后点任何地方都抢焦点
+            if (!AnyTextFocused(this)) Native.SetNoActivate(Handle, true);
             if (_chosen.Count == 0) return;
             foreach (int i in new List<int>(_chosen))
             {
