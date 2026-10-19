@@ -63,7 +63,10 @@ namespace AgentHub
         private readonly Timer _anim = new Timer();
 
         private float _introT;
-        private float _enterT;                 // 开屏入场进度：图标 -> 标题 -> 卡片
+        private float _enterT;                 // 开屏入场进度：背景 -> 图标 -> 标题 -> 卡片
+        private readonly System.Diagnostics.Stopwatch _enterClock = System.Diagnostics.Stopwatch.StartNew();
+        private float _enterDur = 2.0f;        // 开屏总时长（秒）；切换模式时用 0.35
+        private readonly bool _reduceMotion = !Native.AnimationsEnabled();
         private Bitmap _logo;
         private float _hoverT = 1f;
         private float _pressT;
@@ -145,10 +148,12 @@ namespace AgentHub
             _health.Start();
             _anim.Interval = 7;   // 约 144 帧，配合 timeBeginPeriod(1)
             _anim.Tick += AnimTick;
+            Native.timeBeginPeriod(1);   // 不设 1ms 精度时 7ms 定时器实际按 15.6ms 跳，动画会慢一倍
             _anim.Start();   // 启动时就要跑：否则 _introT 一直是 0，侧栏图标画不出来
             _hideTimer.Interval = 250;
             _hideTimer.Tick += HideTick;
             _hideTimer.Start();
+            if (_reduceMotion) _enterDur = 0.30f;   // 系统关掉动态效果：只做一段短淡入
             SetupTray();
             try { using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) if (ic != null) { using (var src0 = ic.ToBitmap()) { _logo = new Bitmap(96, 96); using (var lg = Graphics.FromImage(_logo)) { lg.InterpolationMode = InterpolationMode.HighQualityBicubic; lg.DrawImage(src0, 0, 0, 96, 96); } } } } catch { }
 
@@ -309,7 +314,13 @@ namespace AgentHub
             bool active = false;
 
             if (_introT < 1f) { _introT = Approach(_introT, 1f, 0.06f); active = true; }
-            if (_mode < 0 && _shown < 0 && _enterT < 1f) { _enterT = Approach(_enterT, 1f, 0.010f); active = true; }
+            if (_mode < 0 && _shown < 0 && _enterT < 1f)
+            {
+                // 按真实时间推进，不数 tick：定时器精度不稳定时节奏才不会忽快忽慢
+                _enterT = Clamp01((float)_enterClock.Elapsed.TotalSeconds / _enterDur);
+                if (_enterT >= 1f) _enterT = 1f;
+                active = true;
+            }
             if (_hoverT < 1f) { _hoverT = Approach(_hoverT, 1f, 0.22f); active = true; }
             if (_pressT > 0f) { _pressT = Approach(_pressT, 0f, 0.30f); active = true; }
             if (_expandT < 1f) { _expandT = Approach(_expandT, 1f, 0.20f); active = true; }
@@ -1793,22 +1804,93 @@ namespace AgentHub
                 return;
             }
             // 入场顺序：图标 -> 标题 -> 卡片，总时长约 1.8 秒；点一下可跳过
-            float pIcon = Clamp01(_enterT / 0.32f);
-            float pTitle = Clamp01((_enterT - 0.26f) / 0.34f);
-            float pCards = Clamp01((_enterT - 0.55f) / 0.45f);
+            float pBg = Clamp01(_enterT / 0.18f);
+            float pGlow = Clamp01((_enterT - 0.08f) / 0.34f);
+            float pIcon = Clamp01((_enterT - 0.10f) / 0.36f);
+            float pSweep = Clamp01((_enterT - 0.40f) / 0.22f);
+            float pTitle = Clamp01((_enterT - 0.32f) / 0.32f);
+            float pCardA = Clamp01((_enterT - 0.58f) / 0.30f);
+            float pCardB = Clamp01((_enterT - 0.66f) / 0.30f);
+            float pCards = Math.Max(pCardA, pCardB);
 
+            // ① 背景：竖向柔和渐变，由白渐显，底部略冷
+            Rectangle full = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
+            using (var lg = new LinearGradientBrush(full, Color.FromArgb(255, 255, 255), Color.FromArgb(242, 244, 248),
+                       LinearGradientMode.Vertical))
+                g.FillRectangle(lg, full);
+            if (pBg < 0.999f)
+                using (var veil = new SolidBrush(Color.FromArgb((int)(255 * (1f - pBg)), 255, 255, 255)))
+                    g.FillRectangle(veil, full);
+
+            // ② 图标光晕：橙色径向微光，压在图标后方
+            int logoSize = Px(160);
+            int logoX = left + (Width - left - (RightShown ? RightWPx : 0) - logoSize) / 2;
+            int logoY = (int)(Height * 0.145f + (1f - EaseOut(pIcon)) * Px(22));
+            Rectangle logoRect = new Rectangle(logoX, logoY, logoSize, logoSize);
+            if (pGlow > 0.01f)
+            {
+                int gr = Px(320);
+                Rectangle grc = new Rectangle(logoRect.X + logoSize / 2 - gr / 2, logoRect.Y + logoSize / 2 - gr / 2, gr, gr);
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(grc);
+                    using (var pgb = new PathGradientBrush(path))
+                    {
+                        pgb.CenterColor = Color.FromArgb((int)(70 * pGlow), 255, 168, 76);
+                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, 255, 168, 76) };
+                        g.FillEllipse(pgb, grc);
+                    }
+                }
+            }
+
+            // ③ 图标：从略小、微糊中浮现，稳定后高光扫过一次
             if (pIcon > 0.01f && _logo != null)
             {
-                int sz = Px(160);
-                int lx = left + (Width - left - (RightShown ? RightWPx : 0) - sz) / 2;
-                int ly = (int)(Height * 0.145f + (1f - pIcon) * Px(22));
+                float sc = 0.86f + 0.14f * EaseOut(pIcon);
+                int sz = (int)(logoSize * sc);
+                Rectangle dr = new Rectangle(logoX + (logoSize - sz) / 2, logoY + (logoSize - sz) / 2, sz, sz);
+
+                int blurA = (int)(80 * (1f - pIcon));
+                if (blurA > 4)
+                    for (int i = 0; i < 3; i++)
+                    {
+                        var bia = new System.Drawing.Imaging.ImageAttributes();
+                        var bcm = new System.Drawing.Imaging.ColorMatrix();
+                        bcm.Matrix33 = blurA / 255f;
+                        bia.SetColorMatrix(bcm);
+                        int off = i == 0 ? -Px(3) : (i == 1 ? 0 : Px(3));
+                        g.DrawImage(_logo, new Rectangle(dr.X + off, dr.Y, dr.Width, dr.Height),
+                            0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, bia);
+                        bia.Dispose();
+                    }
+
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
                 cm.Matrix33 = pIcon;
                 ia.SetColorMatrix(cm);
-                g.DrawImage(_logo, new Rectangle(lx, ly, sz, sz), 0, 0, _logo.Width, _logo.Height,
-                    GraphicsUnit.Pixel, ia);
+                g.DrawImage(_logo, dr, 0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, ia);
                 ia.Dispose();
+
+                if (pSweep > 0.001f && pSweep < 0.999f)
+                {
+                    using (var clip = Round(dr, Px(28)))
+                    using (var band = new LinearGradientBrush(
+                               new Rectangle(dr.X - dr.Width, dr.Y, dr.Width * 2, dr.Height),
+                               Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255),
+                               LinearGradientMode.Horizontal))
+                    {
+                        var cb2 = new ColorBlend(3);
+                        cb2.Colors = new Color[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(110, 255, 255, 255), Color.FromArgb(0, 255, 255, 255) };
+                        cb2.Positions = new float[] { 0f, 0.5f, 1f };
+                        band.InterpolationColors = cb2;
+                        var st = g.Save();
+                        g.SetClip(clip);
+                        int shift = (int)(-dr.Width * 1.2f + dr.Width * 2.4f * pSweep);
+                        g.TranslateTransform(shift, 0);
+                        g.FillRectangle(band, new Rectangle(dr.X - dr.Width, dr.Y, dr.Width * 2, dr.Height));
+                        g.Restore(st);
+                    }
+                }
             }
 
             if (pTitle > 0.01f)
@@ -1827,8 +1909,8 @@ namespace AgentHub
 
             Rectangle ca, cb;
             CardRects(out ca, out cb);
-            DrawModeCard(g, ca, "多 agent 协同模式", "拆解 → 执行 → 自检 → 对齐，三个 agent 接力", _mode == 1);
-            DrawModeCard(g, cb, "普通工作站模式", "一次专注一个，切换即换", _mode == 0);
+            DrawModeCardFaded(g, ca, "多 agent 协同模式", "拆解 → 执行 → 自检 → 对齐，三个 agent 接力", _mode == 1, pCardA);
+            DrawModeCardFaded(g, cb, "普通工作站模式", "一次专注一个，切换即换", _mode == 0, pCardB);
         }
 
         private static readonly Color TextBlack = Color.FromArgb(20, 20, 24);
@@ -1869,6 +1951,29 @@ namespace AgentHub
             using (var f = new Font("微软雅黑", Px(16), FontStyle.Regular, GraphicsUnit.Pixel))
                 TextRenderer.DrawText(g, "切换模式", f, sw, Color.FromArgb(70, 70, 80),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        private void DrawModeCardFaded(Graphics g, Rectangle r, string title, string sub, bool selected, float p)
+        {
+            if (p <= 0.02f) return;
+            int dy = (int)((1f - EaseOut(p)) * Px(16));
+            Rectangle rr = new Rectangle(r.X, r.Y + dy, r.Width, r.Height);
+            if (p >= 0.995f) { DrawModeCard(g, rr, title, sub, selected); return; }
+
+            using (var bmp = new Bitmap(Math.Max(1, rr.Width), Math.Max(1, rr.Height)))
+            {
+                using (var gg = Graphics.FromImage(bmp))
+                {
+                    gg.SmoothingMode = SmoothingMode.AntiAlias;
+                    DrawModeCard(gg, new Rectangle(0, 0, rr.Width, rr.Height), title, sub, selected);
+                }
+                var ia = new System.Drawing.Imaging.ImageAttributes();
+                var cm = new System.Drawing.Imaging.ColorMatrix();
+                cm.Matrix33 = p;
+                ia.SetColorMatrix(cm);
+                g.DrawImage(bmp, rr, 0, 0, rr.Width, rr.Height, GraphicsUnit.Pixel, ia);
+                ia.Dispose();
+            }
         }
 
         private void DrawModeCard(Graphics g, Rectangle r, string title, string sub, bool selected)

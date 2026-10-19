@@ -218,5 +218,18 @@ namespace AgentHub
             GetClassName(h, sb, sb.Capacity);
             return sb.ToString();
         }
+        [DllImport("user32.dll")]
+        public static extern bool SystemParametersInfo(int uAction, int uParam, out int lpvParam, int fuWinIni);
+
+        // 系统"减少动态效果"（SPI_GETCLIENTAREAANIMATION）：关闭时应改用简短淡入
+        public static bool AnimationsEnabled()
+        {
+            int v = 1;
+            try { SystemParametersInfo(0x1042, 0, out v, 0); }
+            catch { }
+            return v != 0;
+        }
     }
 }
+
+
