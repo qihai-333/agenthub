@@ -65,7 +65,7 @@ namespace AgentHub
         private float _introT;
         private float _enterT;                 // 开屏入场进度：背景 -> 图标 -> 标题 -> 卡片
         private readonly System.Diagnostics.Stopwatch _enterClock = System.Diagnostics.Stopwatch.StartNew();
-        private float _enterDur = 2.0f;        // 开屏总时长（秒）；切换模式时用 0.35
+        private float _enterDur = 2.5f;        // 开屏总时长（秒）；切换模式时用 0.35
         private readonly bool _reduceMotion = !Native.AnimationsEnabled();
         private Bitmap _logo;
         private float _hoverT = 1f;
@@ -201,6 +201,13 @@ namespace AgentHub
         }
 
         private int Px(int v) { return (int)Math.Round(v * _s); }
+
+        private static Color LerpColor(Color a, Color b, float t)
+        {
+            t = Clamp01(t);
+            return Color.FromArgb((int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t),
+                (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+        }
         private int RightWPx { get { return Px(260); } }
         // 右侧栏只服务普通工作站。协同模式自带面板（轮次/阶段/审批），再叠一条会把它挤掉。
         // 协同面板里的「切换模式」按钮走这里
@@ -592,7 +599,7 @@ namespace AgentHub
             int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
             int h = Px(300);
             int x0 = left0 + (cw - (w * 2 + gap)) / 2;
-            int y = (int)(Height * 0.46f);
+            int y = (int)(Height * 0.44f);
             a = new Rectangle(x0, y, w, h);
             b = new Rectangle(x0 + w + gap, y, w, h);
         }
@@ -1804,66 +1811,88 @@ namespace AgentHub
                 return;
             }
             // 入场顺序：图标 -> 标题 -> 卡片，总时长约 1.8 秒；点一下可跳过
-            float pBg = Clamp01(_enterT / 0.18f);
-            float pGlow = Clamp01((_enterT - 0.08f) / 0.34f);
-            float pIcon = Clamp01((_enterT - 0.10f) / 0.36f);
-            float pSweep = Clamp01((_enterT - 0.40f) / 0.22f);
-            float pTitle = Clamp01((_enterT - 0.32f) / 0.32f);
-            float pCardA = Clamp01((_enterT - 0.58f) / 0.30f);
-            float pCardB = Clamp01((_enterT - 0.66f) / 0.30f);
+            // 总时长 2.5 秒，按秒分阶段
+            float T = _enterT * 2.5f;
+            float pBg = Clamp01(T / 0.40f);
+            float pDots = Clamp01((T - 0.40f) / 0.70f);
+            float pLines = Clamp01((T - 0.55f) / 0.35f) * (1f - Clamp01((T - 1.05f) / 0.25f));
+            float pIcon = Clamp01((T - 0.80f) / 0.80f);
+            float pRing = Clamp01((T - 1.35f) / 0.45f);
+            float pBrand = Clamp01((T - 1.40f) / 0.60f);
+            float pMode = Clamp01((T - 1.90f) / 0.35f);
+            float pCardA = Clamp01((T - 2.05f) / 0.45f);
+            float pCardB = Clamp01((T - 2.12f) / 0.45f);
             float pCards = Math.Max(pCardA, pCardB);
+            float dark = 1f - Clamp01((T - 1.55f) / 0.55f);   // 深色开场，1.55s 后回落到浅色界面
 
-            // ① 背景：竖向柔和渐变，由白渐显，底部略冷
+            int pad0 = RightShown ? RightWPx : 0;
+            int areaW = Width - left - pad0;
+
+            // ① 背景：浅色渐变打底，再叠深色；深色在 1.55s 后淡出
             Rectangle full = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
             using (var lg = new LinearGradientBrush(full, Color.FromArgb(255, 255, 255), Color.FromArgb(242, 244, 248),
                        LinearGradientMode.Vertical))
                 g.FillRectangle(lg, full);
-            if (pBg < 0.999f)
-                using (var veil = new SolidBrush(Color.FromArgb((int)(255 * (1f - pBg)), 255, 255, 255)))
-                    g.FillRectangle(veil, full);
+            if (dark > 0.002f)
+                using (var dv = new SolidBrush(Color.FromArgb((int)(255 * dark), 18, 18, 22)))
+                    g.FillRectangle(dv, full);
 
-            // ② 图标光晕：橙色径向微光，压在图标后方
-            int logoSize = Px(160);
-            int logoX = left + (Width - left - (RightShown ? RightWPx : 0) - logoSize) / 2;
-            int logoY = (int)(Height * 0.145f + (1f - EaseOut(pIcon)) * Px(22));
-            Rectangle logoRect = new Rectangle(logoX, logoY, logoSize, logoSize);
-            if (pGlow > 0.01f)
+            // ② 中心径向光晕 + 细线 + 汇聚光点
+            int logoSize = Px(150);
+            int logoX = left + (areaW - logoSize) / 2;
+            int logoY = (int)(Height * 0.10f + (1f - EaseOut(pIcon)) * Px(18));
+            int cx = logoX + logoSize / 2;
+            int cy = logoY + logoSize / 2;
+
+            if (pBg > 0.01f)
             {
-                int gr = Px(320);
-                Rectangle grc = new Rectangle(logoRect.X + logoSize / 2 - gr / 2, logoRect.Y + logoSize / 2 - gr / 2, gr, gr);
+                int gr = Px(560);
+                Rectangle grc = new Rectangle(cx - gr / 2, cy - gr / 2, gr, gr);
                 using (var path = new GraphicsPath())
                 {
                     path.AddEllipse(grc);
                     using (var pgb = new PathGradientBrush(path))
                     {
-                        pgb.CenterColor = Color.FromArgb((int)(70 * pGlow), 255, 168, 76);
-                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, 255, 168, 76) };
+                        int ga = (int)(80 * pBg * (0.30f + 0.70f * dark));
+                        pgb.CenterColor = Color.FromArgb(Math.Max(0, Math.Min(255, ga)), 255, 150, 64);
+                        pgb.SurroundColors = new Color[] { Color.FromArgb(0, 255, 150, 64) };
                         g.FillEllipse(pgb, grc);
                     }
                 }
             }
 
-            // ③ 图标：从略小、微糊中浮现，稳定后高光扫过一次
-            if (pIcon > 0.01f && _logo != null)
-            {
-                float sc = 0.86f + 0.14f * EaseOut(pIcon);
-                int sz = (int)(logoSize * sc);
-                Rectangle dr = new Rectangle(logoX + (logoSize - sz) / 2, logoY + (logoSize - sz) / 2, sz, sz);
-
-                int blurA = (int)(80 * (1f - pIcon));
-                if (blurA > 4)
-                    for (int i = 0; i < 3; i++)
+            if (pLines > 0.01f)
+                using (var pen = new Pen(Color.FromArgb((int)(70 * pLines), 255, 186, 120), Px(1)))
+                    for (int i = 0; i < 6; i++)
                     {
-                        var bia = new System.Drawing.Imaging.ImageAttributes();
-                        var bcm = new System.Drawing.Imaging.ColorMatrix();
-                        bcm.Matrix33 = blurA / 255f;
-                        bia.SetColorMatrix(bcm);
-                        int off = i == 0 ? -Px(3) : (i == 1 ? 0 : Px(3));
-                        g.DrawImage(_logo, new Rectangle(dr.X + off, dr.Y, dr.Width, dr.Height),
-                            0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, bia);
-                        bia.Dispose();
+                        double ang = i * Math.PI / 3.0 + 0.26;
+                        int ex = cx + (int)(Math.Cos(ang) * Px(78));
+                        int ey = cy + (int)(Math.Sin(ang) * Px(78) * 0.74);
+                        g.DrawLine(pen, cx, cy, ex, ey);
                     }
 
+            if (pDots > 0.01f && pDots < 0.995f)
+            {
+                float ease = EaseOut(pDots);
+                float al = (float)Math.Sin(Math.PI * Math.Min(1f, pDots));
+                for (int i = 0; i < 6; i++)
+                {
+                    double ang = i * Math.PI / 3.0 + 0.26;
+                    float r = Px(300) * (1f - ease);
+                    int dx = (int)(Math.Cos(ang) * r);
+                    int dy = (int)(Math.Sin(ang) * r * 0.74);
+                    int a2 = (int)(170 * al);
+                    using (var br = new SolidBrush(Color.FromArgb(Math.Max(0, Math.Min(255, a2)), 255, 196, 132)))
+                        g.FillEllipse(br, cx + dx - Px(3), cy + dy - Px(3), Px(6), Px(6));
+                }
+            }
+
+            // ③ 图标：由小、低透明平稳浮现，稳定后一圈柔和光环
+            if (pIcon > 0.01f && _logo != null)
+            {
+                float sc = 0.88f + 0.12f * EaseOut(pIcon);
+                int sz = (int)(logoSize * sc);
+                Rectangle dr = new Rectangle(cx - sz / 2, cy - sz / 2, sz, sz);
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
                 cm.Matrix33 = pIcon;
@@ -1871,38 +1900,42 @@ namespace AgentHub
                 g.DrawImage(_logo, dr, 0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, ia);
                 ia.Dispose();
 
-                if (pSweep > 0.001f && pSweep < 0.999f)
+                if (pRing > 0.001f && pRing < 0.999f)
                 {
-                    using (var clip = Round(dr, Px(28)))
-                    using (var band = new LinearGradientBrush(
-                               new Rectangle(dr.X - dr.Width, dr.Y, dr.Width * 2, dr.Height),
-                               Color.FromArgb(0, 255, 255, 255), Color.FromArgb(0, 255, 255, 255),
-                               LinearGradientMode.Horizontal))
-                    {
-                        var cb2 = new ColorBlend(3);
-                        cb2.Colors = new Color[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(110, 255, 255, 255), Color.FromArgb(0, 255, 255, 255) };
-                        cb2.Positions = new float[] { 0f, 0.5f, 1f };
-                        band.InterpolationColors = cb2;
-                        var st = g.Save();
-                        g.SetClip(clip);
-                        int shift = (int)(-dr.Width * 1.2f + dr.Width * 2.4f * pSweep);
-                        g.TranslateTransform(shift, 0);
-                        g.FillRectangle(band, new Rectangle(dr.X - dr.Width, dr.Y, dr.Width * 2, dr.Height));
-                        g.Restore(st);
-                    }
+                    int rr = (int)(logoSize * 0.62f + logoSize * 0.55f * EaseOut(pRing));
+                    int ra = (int)(110 * (1f - pRing));
+                    using (var pen = new Pen(Color.FromArgb(Math.Max(0, Math.Min(255, ra)), 255, 172, 88), Px(2)))
+                        g.DrawEllipse(pen, cx - rr, cy - rr, rr * 2, rr * 2);
                 }
             }
 
-            if (pTitle > 0.01f)
-            using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
+            // ④ 品牌名 + 副标题（沿用 README 的定位语，不新编宣传语）
+            if (pBrand > 0.02f)
+            {
+                Color brandCol = LerpColor(Color.FromArgb(248, 248, 250), Color.FromArgb(22, 22, 26), 1f - dark);
+                int rise = (int)((1f - EaseOut(pBrand)) * Px(10));
+                using (var f = new Font("Segoe UI", Px(44), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center })
+                using (var br = new SolidBrush(Color.FromArgb((int)(255 * pBrand), brandCol)))
+                    g.DrawString("AgentHub", f, br,
+                        new RectangleF(left, Height * 0.238f + rise, areaW, Px(58)), sf);
+
+                Color subCol = LerpColor(Color.FromArgb(170, 172, 182), Color.FromArgb(120, 120, 130), 1f - dark);
+                using (var f = new Font("微软雅黑", Px(15), FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var sf2 = new StringFormat { Alignment = StringAlignment.Center })
+                using (var br2 = new SolidBrush(Color.FromArgb((int)(255 * pBrand), subCol)))
+                    g.DrawString("把 AI 应用收进一条侧栏", f, br2,
+                        new RectangleF(left, Height * 0.272f + rise, areaW, Px(28)), sf2);
+            }
+
+            // ⑤ 模式选择标题
+            if (pMode > 0.02f)
+            using (var f = new Font("微软雅黑", Px(52), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
-                var r = new RectangleF(left, Height * 0.30f + (1f - pTitle) * Px(14), Width - left - (RightShown ? RightWPx : 0), Px(90));
-                for (int i = 9; i >= 1; i--)
-                using (var br = new SolidBrush(Color.FromArgb((int)(20 * pTitle), 0, 0, 0)))
-                    g.DrawString("选择你的工作模式", f, br,
-                        new RectangleF(r.X, r.Y + i * 1.2f, r.Width, r.Height), sf);
-                using (var tb = new SolidBrush(Color.FromArgb((int)(255 * pTitle), 24, 24, 28)))
+                var r = new RectangleF(left, Height * 0.335f + (1f - EaseOut(pMode)) * Px(12), areaW, Px(76));
+                Color tc = LerpColor(Color.FromArgb(248, 248, 250), Color.FromArgb(20, 20, 24), 1f - dark);
+                using (var tb = new SolidBrush(Color.FromArgb((int)(255 * pMode), tc)))
                     g.DrawString("选择你的工作模式", f, tb, r, sf);
             }
             if (pCards <= 0.02f) return;
