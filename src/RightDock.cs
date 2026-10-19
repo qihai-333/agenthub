@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -17,7 +17,7 @@ namespace AgentHub
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            TopMost = true;
+            // 不加 TopMost：和左侧栏一样待在普通窗口层，不会盖住用户自己的窗口
             BackColor = Color.FromArgb(250, 250, 251);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint, true);
