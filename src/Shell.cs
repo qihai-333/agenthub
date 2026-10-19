@@ -155,7 +155,35 @@ namespace AgentHub
             _hideTimer.Start();
             if (_reduceMotion) _enterDur = 0.30f;   // 系统关掉动态效果：只做一段短淡入
             SetupTray();
-            try { using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) if (ic != null) { using (var src0 = ic.ToBitmap()) { _logo = new Bitmap(96, 96); using (var lg = Graphics.FromImage(_logo)) { lg.InterpolationMode = InterpolationMode.HighQualityBicubic; lg.DrawImage(src0, 0, 0, 96, 96); } } } } catch { }
+                        // 图标源：优先用同目录的 logo.png（512×512 源图）；没有再退回 exe 图标
+            // 之前直接从 exe 图标取，ExtractAssociatedIcon 只给 32×32，放大到 160px 必然发糊
+            try
+            {
+                string lp = System.IO.Path.Combine(Application.StartupPath, "logo.png");
+                if (System.IO.File.Exists(lp))
+                {
+                    using (var fs = new System.IO.FileStream(lp, System.IO.FileMode.Open, System.IO.FileAccess.Read))
+                    using (var tmp0 = Image.FromStream(fs))
+                        _logo = new Bitmap(tmp0, 512, 512);
+                }
+                else
+                {
+                    using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
+                        if (ic != null)
+                        {
+                            using (var src0 = ic.ToBitmap())
+                            {
+                                _logo = new Bitmap(256, 256);
+                                using (var lg = Graphics.FromImage(_logo))
+                                {
+                                    lg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                    lg.DrawImage(src0, 0, 0, 256, 256);
+                                }
+                            }
+                        }
+                }
+            }
+            catch { }
 
             string shownId;
             List<string> ids;
@@ -481,6 +509,7 @@ namespace AgentHub
         {
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.Clear(_shown >= 0 ? SideBg : Bg);
 
             bool boot = _shown < 0 && _mode < 0;   // 还没选模式：整屏只有动画和卡片，左右侧栏都不出现
@@ -1897,7 +1926,12 @@ namespace AgentHub
                 var cm = new System.Drawing.Imaging.ColorMatrix();
                 cm.Matrix33 = pIcon;
                 ia.SetColorMatrix(cm);
+                // 圆角裁切：logo.png 是白底方形，直接贴到深色开屏上会是个白方块
+                var stIcon = g.Save();
+                using (var clipPath = Round(dr, Px(30)))
+                    g.SetClip(clipPath);
                 g.DrawImage(_logo, dr, 0, 0, _logo.Width, _logo.Height, GraphicsUnit.Pixel, ia);
+                g.Restore(stIcon);
                 ia.Dispose();
 
                 if (pRing > 0.001f && pRing < 0.999f)
