@@ -252,6 +252,10 @@ namespace AgentHub
         // 右侧栏现在是独立小窗（RightDock），这里只表示"要不要给它留位置"
         private bool RightShown { get { return _rightDock != null && _rightDock.Visible; } }
         private RightDock _rightDock;
+        private int _fpsFrames;
+        private Bitmap _bgBmp;
+        private Size _bgSize;
+        private DateTime _fpsMark = DateTime.Now;
 
         public string ModeTitle() { return _mode == 1 ? "多 agent 协同" : "普通工作站"; }
         public int AgentCount { get { return _agents.Count; } }
@@ -347,6 +351,13 @@ namespace AgentHub
         private void AnimTick(object sender, EventArgs e)
         {
             bool active = false;
+            _fpsFrames++;
+            if ((DateTime.Now - _fpsMark).TotalMilliseconds >= 1000)
+            {
+                Program.Log("fps=" + _fpsFrames);
+                _fpsFrames = 0;
+                _fpsMark = DateTime.Now;
+            }
 
             if (_introT < 1f) { _introT = Approach(_introT, 1f, 0.06f); active = true; }
             if (_mode < 0 && _shown < 0 && _enterT < 1f)
@@ -1859,9 +1870,31 @@ namespace AgentHub
 
             // ① 背景：浅色渐变打底，再叠深色；深色在 1.55s 后淡出
             Rectangle full = new Rectangle(0, 0, Math.Max(1, Width), Math.Max(1, Height));
-            using (var lg = new LinearGradientBrush(full, Color.FromArgb(255, 255, 255), Color.FromArgb(242, 244, 248),
-                       LinearGradientMode.Vertical))
-                g.FillRectangle(lg, full);
+            if (_bgBmp == null || _bgSize != new Size(Width, Height))
+            {
+                if (_bgBmp != null) _bgBmp.Dispose();
+                _bgBmp = new Bitmap(Math.Max(1, Width), Math.Max(1, Height));
+                using (var bg = Graphics.FromImage(_bgBmp))
+                {
+                    using (var lgb = new LinearGradientBrush(full, Color.FromArgb(255, 255, 255), Color.FromArgb(242, 244, 248), LinearGradientMode.Vertical))
+                        bg.FillRectangle(lgb, full);
+                    using (var path0 = new GraphicsPath())
+                    {
+                        int gr0 = Px(1100);
+                        Rectangle g0 = new Rectangle(Width / 2 - gr0 / 2, (int)(Height * 0.30f) - gr0 / 2, gr0, gr0);
+                        path0.AddEllipse(g0);
+                        using (var pg0 = new PathGradientBrush(path0))
+                        {
+                            pg0.CenterColor = Color.FromArgb(58, 226, 235, 252);
+                            pg0.SurroundColors = new Color[] { Color.FromArgb(0, 226, 235, 252) };
+                            bg.FillEllipse(pg0, g0);
+                        }
+                    }
+                }
+                _bgSize = new Size(Width, Height);
+            }
+            g.DrawImage(_bgBmp, 0, 0);
+
             if (dark > 0.002f)
                 using (var dv = new SolidBrush(Color.FromArgb((int)(255 * dark), 18, 18, 22)))
                     g.FillRectangle(dv, full);
