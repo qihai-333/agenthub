@@ -395,6 +395,56 @@ namespace AgentHub
             return best;
         }
 
+        // 进程归属：pid -> 是否由本应用 CreateProcess 启动。只对我方的进程负责。
+        private static readonly Dictionary<int, bool> Owned = new Dictionary<int, bool>();
+
+        public static void Register(int pid, bool mine)
+        {
+            if (pid <= 0) return;
+            if (!Owned.ContainsKey(pid)) Owned[pid] = mine;
+        }
+
+        public static bool IsOwned(int pid)
+        {
+            bool mine;
+            return Owned.TryGetValue(pid, out mine) && mine;
+        }
+
+        public static void Forget(int pid) { Owned.Remove(pid); }
+
+        public static List<int> OwnedPids()
+        {
+            var list = new List<int>();
+            foreach (KeyValuePair<int, bool> kv in Owned) if (kv.Value) list.Add(kv.Key);
+            return list;
+        }
+
+        // 两段式结束：先请求正常退出，给 graceMs 收尾，剩下的强杀整棵树
+        public static int KillOwned(int graceMs)
+        {
+            List<int> pids = OwnedPids();
+            foreach (int pid in pids)
+            {
+                try { using (Process p = Process.GetProcessById(pid)) p.CloseMainWindow(); }
+                catch { }
+            }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < graceMs && pids.Count > 0)
+            {
+                pids.RemoveAll(delegate(int pid)
+                {
+                    try { using (Process p = Process.GetProcessById(pid)) return p.HasExited; }
+                    catch { return true; }
+                });
+                if (pids.Count == 0) break;
+                System.Threading.Thread.Sleep(60);
+            }
+            foreach (int pid in pids) KillTree(pid);
+            int killed = pids.Count;
+            Owned.Clear();
+            return killed;
+        }
+
         public static void Launch(Agent a) { Launch(a, false); }
 
         public static void Launch(Agent a, bool hidden)
@@ -428,7 +478,8 @@ namespace AgentHub
                 if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) psi.WorkingDirectory = dir;
             }
             catch { }
-            Process.Start(psi);
+            Process pr = Process.Start(psi);
+            if (pr != null) Register(pr.Id, true);   // 记下来：这个是我们启动的
         }
 
         public static string EdgePath()
@@ -453,7 +504,8 @@ namespace AgentHub
             psi.FileName = edge;
             psi.UseShellExecute = false;
             psi.Arguments = "--app=" + a.Url + " --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check --window-size=1400,900";
-            Process.Start(psi);
+            Process pr = Process.Start(psi);
+            if (pr != null) Register(pr.Id, true);   // 记下来：这个是我们启动的
         }
 
         public static bool Apply(IntPtr hwnd, IntPtr shell, Rectangle rect, bool offsetFrame)
@@ -588,7 +640,8 @@ namespace AgentHub
                 var psi = new ProcessStartInfo("taskkill.exe", "/PID " + pid + " /T /F");
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
-                Process.Start(psi);
+                Process pr = Process.Start(psi);
+            if (pr != null) Register(pr.Id, true);   // 记下来：这个是我们启动的
                 Program.Log("kill tree pid=" + pid);
             }
             catch (Exception ex)

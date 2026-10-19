@@ -2536,7 +2536,8 @@ namespace AgentHub
                     IntPtr better = Host.FindVisible(_agents[i], DateTime.MinValue);
                     if (better != IntPtr.Zero) { hwnd = better; Native.GetWindowThreadProcessId(hwnd, out pid); }
                 }
-                _pids[i] = (int)pid;
+                Host.Register((int)pid, false);   // 非我方启动的窗口；若本次是我 Launch 的，Launch 已登记为 true，不会被覆盖
+            _pids[i] = (int)pid;
                 _windows[i] = hwnd;
                 _shown = -1;
                 ApplyBounds();
@@ -2569,6 +2570,7 @@ namespace AgentHub
             }
 
             // 先把自己缩成侧栏，否则铺满的窗口会盖住刚要显示的应用
+            Host.Register((int)pid, false);   // 非我方启动的窗口；若本次是我 Launch 的，Launch 已登记为 true，不会被覆盖
             _pids[i] = (int)pid;
             _windows[i] = hwnd;
             _shown = i;
@@ -2608,7 +2610,7 @@ namespace AgentHub
                 _shown = -1;
             }
             int pid;
-            if (_pids.TryGetValue(i, out pid)) Host.KillTree(pid);
+            if (_pids.TryGetValue(i, out pid)) { if (Host.IsOwned(pid)) Host.KillTree(pid); else Host.Forget(pid); }
 
             _chosen.Remove(i);
             _windows.Remove(i);
@@ -2684,15 +2686,9 @@ namespace AgentHub
             // 未结束的协同会话：结束并落盘，记录不丢
             EndSessionIfAny();
 
-            foreach (int i in new List<int>(_chosen))
-            {
-                int pid;
-                if (_pids.TryGetValue(i, out pid))
-                {
-                    Program.Log("exit kill " + _agents[i].Id);
-                    Host.KillTree(pid);
-                }
-            }
+            // 两段式结束：只处理本应用启动的进程（用户自己开的不动）；先请求正常退出，1.5 秒后强杀，总时长有上限
+            int killed = Host.KillOwned(1500);
+            if (killed > 0) Program.Log("exit: force-killed " + killed);
 
             IntPtr h;
             if (_shown >= 0 && _windows.TryGetValue(_shown, out h)) Host.Hide(h);
