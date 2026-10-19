@@ -146,7 +146,7 @@ namespace AgentHub
             _health.Interval = 1000;
             _health.Tick += HealthTick;
             _health.Start();
-            _anim.Interval = 7;   // 约 144 帧，配合 timeBeginPeriod(1)
+            _anim.Interval = 3;   // 约 300Hz，配合 timeBeginPeriod(1) 才能真正跑到这个节拍
             _anim.Tick += AnimTick;
             Native.timeBeginPeriod(1);   // 不设 1ms 精度时 7ms 定时器实际按 15.6ms 跳，动画会慢一倍
             _anim.Start();   // 启动时就要跑：否则 _introT 一直是 0，侧栏图标画不出来
@@ -1959,7 +1959,7 @@ namespace AgentHub
                 using (var sf2 = new StringFormat { Alignment = StringAlignment.Center })
                 using (var br2 = new SolidBrush(Color.FromArgb((int)(255 * pBrand), subCol)))
                     g.DrawString("把 AI 应用收进一条侧栏", f, br2,
-                        new RectangleF(left, Height * 0.272f + rise, areaW, Px(28)), sf2);
+                        new RectangleF(left, Height * 0.300f + rise, areaW, Px(28)), sf2);
             }
 
             // ⑤ 模式选择标题
