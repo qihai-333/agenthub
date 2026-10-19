@@ -2116,6 +2116,7 @@ namespace AgentHub
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("显示", null, delegate { BeginInvoke((MethodInvoker)ShowFromBackground); });
+            menu.Items.Add("隐藏到托盘", null, delegate { BeginInvoke((MethodInvoker)HideToBackground); });
             menu.Items.Add("重新加载", null, delegate { BeginInvoke((MethodInvoker)ReloadApp); });
             menu.Items.Add("打开日志", null, delegate { BeginInvoke((MethodInvoker)OpenLog); });
             menu.Items.Add(new ToolStripSeparator());
@@ -2672,14 +2673,6 @@ namespace AgentHub
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (!_reallyExit)
-            {
-                // 点 × / 任务栏关闭 = 关到后台，不是退出
-                e.Cancel = true;
-                HideToBackground();
-                return;
-            }
-
             _poll.Stop(); _health.Stop(); _anim.Stop(); _restoreTimer.Stop();
             SaveSessionNow();
 
