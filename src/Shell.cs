@@ -191,8 +191,9 @@ namespace AgentHub
         public void SwitchModeFromPanel()
         {
             ExitSynergy();
-            _enterT = 0f;
             _mode = -1;
+            _enterT = 0f;
+            Kick();          // 必须重启动画定时器：否则入场进度停在 0，绘制直接 return，表现为白屏
             Invalidate();
         }
 
@@ -2057,7 +2058,7 @@ namespace AgentHub
             if (RightShown && RightPanelRect().Contains(e.Location))
             {
                 if (AddProcRect().Contains(e.Location)) { ShowAdd(); return; }
-                if (SwitchModeRect().Contains(e.Location)) { _mode = -1; _enterT = 0f; Invalidate(); return; }
+                if (SwitchModeRect().Contains(e.Location)) { _mode = -1; _enterT = 0f; Kick(); Invalidate(); return; }
                 return;
             }
             if (_shown < 0)
