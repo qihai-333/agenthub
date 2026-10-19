@@ -415,10 +415,15 @@ namespace AgentHub
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(_shown >= 0 ? SideBg : Bg);
 
-            g.FillRectangle(_bSide, 0, 0, _sideW, Height);
-            g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
+            bool boot = _shown < 0 && _mode < 0;   // 还没选模式：整屏只有动画和卡片，左右侧栏都不出现
+            if (!boot)
+            {
+                g.FillRectangle(_bSide, 0, 0, _sideW, Height);
+                g.DrawLine(_pLine, _sideW - 1, 0, _sideW - 1, Height);
+            }
 
             if (_shown < 0) DrawModeChooser(g);
+            if (boot) return;
 
             if (_shown >= 0 && _shown < _agents.Count)
             {
@@ -520,11 +525,12 @@ namespace AgentHub
 
         private void CardRects(out Rectangle a, out Rectangle b)
         {
-            int cw = Width - _sideW;
+            int left0 = _mode < 0 ? 0 : _sideW;
+            int cw = Width - left0;
             int gap = Px(48);
             int w = Math.Max(Px(200), Math.Min(Px(540), (cw - gap * 3) / 2));
             int h = Px(300);
-            int x0 = _sideW + (cw - (w * 2 + gap)) / 2;
+            int x0 = left0 + (cw - (w * 2 + gap)) / 2;
             int y = (int)(Height * 0.42f);
             a = new Rectangle(x0, y, w, h);
             b = new Rectangle(x0 + w + gap, y, w, h);
@@ -1707,10 +1713,13 @@ namespace AgentHub
         {
             g.Clear(Color.White);
 
-            using (var b = new SolidBrush(SideBg))
-                g.FillRectangle(b, 0, 0, _sideW, Height);
+            bool boot = _mode < 0;
+            int left = boot ? 0 : _sideW;
+            if (!boot)
+                using (var b = new SolidBrush(SideBg))
+                    g.FillRectangle(b, 0, 0, _sideW, Height);
 
-            if (Width - _sideW < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
+            if (Width - left < Px(300)) return;   // 侧栏宽度时没有内容区可画，别算负数
             // 输入框的显隐跟协同状态走，避免离开协同模式后残留文本框
             bool showTask = _mode == 1 && _tiled && !_picking && _synPanel == null && (_pipe == null || _pipe.Phase == PipePhase.Idle);
             if (_taskBox != null && _taskBox.Visible != showTask) _taskBox.Visible = showTask;
@@ -1729,7 +1738,7 @@ namespace AgentHub
             if (pIcon > 0.01f && _logo != null)
             {
                 int sz = Px(104);
-                int lx = _sideW + (Width - _sideW - sz) / 2;
+                int lx = left + (Width - left - sz) / 2;
                 int ly = (int)(Height * 0.105f + (1f - pIcon) * Px(18));
                 var ia = new System.Drawing.Imaging.ImageAttributes();
                 var cm = new System.Drawing.Imaging.ColorMatrix();
@@ -1744,7 +1753,7 @@ namespace AgentHub
             using (var f = new Font("微软雅黑", Px(64), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center })
             {
-                var r = new RectangleF(_sideW, Height * 0.25f + (1f - pTitle) * Px(14), Width - _sideW, Px(90));
+                var r = new RectangleF(left, Height * 0.25f + (1f - pTitle) * Px(14), Width - left, Px(90));
                 for (int i = 9; i >= 1; i--)
                 using (var br = new SolidBrush(Color.FromArgb((int)(20 * pTitle), 0, 0, 0)))
                     g.DrawString("选择你的工作模式", f, br,
@@ -1786,7 +1795,7 @@ namespace AgentHub
 
         private void DrawTile(Graphics g, Agent a, Rectangle r)
         {
-            int sz = Px(36);
+            int sz = Px(40);
             Rectangle ir = new Rectangle(r.X + (r.Width - sz) / 2, r.Y + (r.Height - sz) / 2, sz, sz);
             Bitmap bmp = Icons.Get(a);
             if (bmp == null) bmp = Icons.Letter(a.Name, 48);
